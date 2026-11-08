@@ -14,6 +14,7 @@ public class FirstPersonPlayer : MonoBehaviour
     [Header("Looking")]
     public float lookSensitivity = 2.5f;
     public float maxLookAngle = 85f;
+    public float arrowKeyLookSpeed = 120f;   // degrees per second
 
     // The frame the mouse was last grabbed on, so the click that grabs it
     // doesn't also break a block
@@ -35,10 +36,10 @@ public class FirstPersonPlayer : MonoBehaviour
     void Update()
     {
         // Escape lets go of the mouse so you can get back to the Unity editor.
-        // Click the game again to carry on playing.
+        // Click the game or press Enter to carry on playing.
         if (Input.GetKeyDown(KeyCode.Escape))
             LockMouse(false);
-        else if (Input.GetMouseButtonDown(0) && Cursor.lockState != CursorLockMode.Locked)
+        else if ((Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Return)) && Cursor.lockState != CursorLockMode.Locked)
             LockMouse(true);
 
         Look();
@@ -52,12 +53,20 @@ public class FirstPersonPlayer : MonoBehaviour
         if (locked) MouseLockedFrame = Time.frameCount;
     }
 
+    // -1 if the first key is held, +1 for the second, 0 for neither or both
+    static float KeyPair(KeyCode negative, KeyCode positive)
+    {
+        return (Input.GetKey(positive) ? 1f : 0f) - (Input.GetKey(negative) ? 1f : 0f);
+    }
+
     void Look()
     {
         if (Cursor.lockState != CursorLockMode.Locked) return;
 
-        float mouseX = Input.GetAxisRaw("Mouse X") * lookSensitivity;
-        float mouseY = Input.GetAxisRaw("Mouse Y") * lookSensitivity;
+        // Look with the mouse, the arrow keys, or both
+        float arrowStep = arrowKeyLookSpeed * Time.deltaTime;
+        float mouseX = Input.GetAxisRaw("Mouse X") * lookSensitivity + KeyPair(KeyCode.LeftArrow, KeyCode.RightArrow) * arrowStep;
+        float mouseY = Input.GetAxisRaw("Mouse Y") * lookSensitivity + KeyPair(KeyCode.DownArrow, KeyCode.UpArrow) * arrowStep;
 
         // The body spins left and right...
         transform.Rotate(0f, mouseX, 0f);
@@ -69,8 +78,10 @@ public class FirstPersonPlayer : MonoBehaviour
 
     void Move()
     {
-        float sideways = Input.GetAxisRaw("Horizontal");   // A and D
-        float forwards = Input.GetAxisRaw("Vertical");     // W and S
+        // WASD only - Unity's built-in "Horizontal" and "Vertical" would also
+        // walk us around with the arrow keys, and those are for looking
+        float sideways = KeyPair(KeyCode.A, KeyCode.D);
+        float forwards = KeyPair(KeyCode.S, KeyCode.W);
 
         Vector3 move = (transform.right * sideways + transform.forward * forwards).normalized * walkSpeed;
         bool swimming = InWater();

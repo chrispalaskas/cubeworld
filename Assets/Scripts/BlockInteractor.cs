@@ -39,7 +39,7 @@ public class BlockInteractor : MonoBehaviour
         if (Cursor.lockState != CursorLockMode.Locked) return;
         if (Time.frameCount == FirstPersonPlayer.MouseLockedFrame) return;   // that click was just to grab the mouse
 
-        if (Input.GetMouseButtonDown(0))
+        if (Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Q))
         {
             if (selected == Sponge)
                 WipeWater();
@@ -48,7 +48,7 @@ public class BlockInteractor : MonoBehaviour
             else
                 Break();
         }
-        else if (Input.GetMouseButtonDown(1))
+        else if (Input.GetMouseButtonDown(1) || Input.GetKeyDown(KeyCode.E))
             Place();
     }
 
@@ -332,6 +332,7 @@ public class BlockInteractor : MonoBehaviour
 
         string[] names = { "", "Grass", "Dirt", "Stone", "Wood", "Sand", "Leaves", "Water", "TNT", "Sponge", "Leash" };
         GUI.Label(new Rect(12, 10, 400, 24), "Holding: " + names[selected] + "   (press 1-9 or 0 to change)");
-        GUI.Label(new Rect(12, 30, 800, 24), "WASD move   Space jump / swim up   Left click break / wipe water / leash   Right click place   Esc frees mouse");
+        GUI.Label(new Rect(12, 30, 800, 24), "WASD move   Arrows or mouse look   Space jump / swim up");
+        GUI.Label(new Rect(12, 50, 800, 24), "Q or left click: break / wipe water / leash   E or right click: place   Esc frees mouse, Enter returns");
     }
 }
