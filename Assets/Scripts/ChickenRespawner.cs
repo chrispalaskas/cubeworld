@@ -8,13 +8,22 @@ public class ChickenRespawner : MonoBehaviour
     const int FlockSize = 12;
     const float SecondsBetweenChickens = 10f;
 
+    private static ChickenRespawner instance;
     private BlockWorld world;
     private Material white, red, orange, black;
+
+    // A chicken egg was placed - a chicken pops out right there
+    public static void Hatch(Vector3 spot)
+    {
+        if (instance == null) return;
+        Chicken.SpawnAt(instance.world, spot, instance.white, instance.red, instance.orange, instance.black);
+    }
 
     public static void Begin(BlockWorld world)
     {
         ChickenRespawner respawner = new GameObject("Chicken Respawner").AddComponent<ChickenRespawner>();
         respawner.world = world;
+        instance = respawner;
 
         // One material per colour, shared by every chicken
         respawner.white = BlockWorld.MakeMaterial(new Color(0.95f, 0.95f, 0.90f));

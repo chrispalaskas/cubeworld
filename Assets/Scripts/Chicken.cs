@@ -24,8 +24,13 @@ public class Chicken : MonoBehaviour, ILeashable
     public static void Spawn(BlockWorld world, Material white, Material red, Material orange, Material black)
     {
         Vector3 spot;
-        if (!FindGrass(world, out spot)) return;
+        if (FindGrass(world, out spot))
+            SpawnAt(world, spot, white, red, orange, black);
+    }
 
+    // Puts one new chicken exactly here - used when an egg hatches
+    public static void SpawnAt(BlockWorld world, Vector3 spot, Material white, Material red, Material orange, Material black)
+    {
         GameObject obj = new GameObject("Chicken");
         obj.transform.position = spot;
 

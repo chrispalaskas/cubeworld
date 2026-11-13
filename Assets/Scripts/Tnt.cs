@@ -3,11 +3,15 @@ using UnityEngine;
 
 // A lit block of TNT. It flashes while the fuse burns, then destroys every
 // block, squirrel and chicken within BlastRadius. Break the block before the fuse runs
-// out and the bomb is defused.
+// out and the bomb is defused. Mega TNT (made at a crafting table) works the
+// same way, with a longer fuse and a much bigger bang.
 public class Tnt : MonoBehaviour
 {
     public const float FuseSeconds = 3f;
     public const int BlastRadius = 5;
+
+    public const float MegaFuseSeconds = 5f;
+    public const int MegaBlastRadius = 8;
 
     // TNT caught in a blast isn't destroyed - it goes off a moment later
     const float ChainReactionSeconds = 0.4f;
@@ -15,6 +19,13 @@ public class Tnt : MonoBehaviour
     private BlockWorld world;
     private Vector3Int cell;
     private float timeLeft;
+    private byte type;     // Tnt or MegaTnt
+    private int radius;
+
+    public static bool IsExplosive(byte type)
+    {
+        return type == BlockWorld.Tnt || type == BlockWorld.MegaTnt;
+    }
 
     public static void Ignite(BlockWorld world, Vector3Int cell, float seconds)
     {
@@ -33,6 +44,8 @@ public class Tnt : MonoBehaviour
         tnt.world = world;
         tnt.cell = cell;
         tnt.timeLeft = seconds;
+        tnt.type = world.GetBlock(cell.x, cell.y, cell.z);
+        tnt.radius = tnt.type == BlockWorld.MegaTnt ? MegaBlastRadius : BlastRadius;
         world.LitTnt[cell] = tnt;
     }
 
@@ -53,7 +66,7 @@ public class Tnt : MonoBehaviour
 
         while (timeLeft > 0f)
         {
-            if (world.GetBlock(cell.x, cell.y, cell.z) != BlockWorld.Tnt)
+            if (world.GetBlock(cell.x, cell.y, cell.z) != type)
             {
                 world.LitTnt.Remove(cell);   // someone broke it in time
                 Destroy(gameObject);
@@ -79,33 +92,40 @@ public class Tnt : MonoBehaviour
         world.LitTnt.Remove(cell);
         world.SetBlock(cell.x, cell.y, cell.z, BlockWorld.Air);
 
-        for (int dx = -BlastRadius; dx <= BlastRadius; dx++)
-        for (int dy = -BlastRadius; dy <= BlastRadius; dy++)
-        for (int dz = -BlastRadius; dz <= BlastRadius; dz++)
+        for (int dx = -radius; dx <= radius; dx++)
+        for (int dy = -radius; dy <= radius; dy++)
+        for (int dz = -radius; dz <= radius; dz++)
         {
-            if (dx * dx + dy * dy + dz * dz > BlastRadius * BlastRadius) continue;   // makes the crater round
+            if (dx * dx + dy * dy + dz * dz > radius * radius) continue;   // makes the crater round
 
             int x = cell.x + dx;
             int y = cell.y + dy;
             int z = cell.z + dz;
-            byte type = world.GetBlock(x, y, z);
+            byte there = world.GetBlock(x, y, z);
 
-            if (type == BlockWorld.Tnt)
+            if (IsExplosive(there))
                 Ignite(world, new Vector3Int(x, y, z), ChainReactionSeconds);
-            else if (type != BlockWorld.Air)
+            else if (there != BlockWorld.Air)
                 world.SetBlock(x, y, z, BlockWorld.Air);
         }
 
         foreach (Squirrel squirrel in FindObjectsByType<Squirrel>(FindObjectsSortMode.None))
         {
-            if (Vector3.Distance(squirrel.transform.position, cell) <= BlastRadius)
+            if (Vector3.Distance(squirrel.transform.position, cell) <= radius)
                 Destroy(squirrel.gameObject);
         }
 
         foreach (Chicken chicken in FindObjectsByType<Chicken>(FindObjectsSortMode.None))
         {
-            if (Vector3.Distance(chicken.transform.position, cell) <= BlastRadius)
+            if (Vector3.Distance(chicken.transform.position, cell) <= radius)
                 chicken.BlowUp();
+        }
+
+        // People don't get hurt - they get sent flying
+        foreach (Villager person in FindObjectsByType<Villager>(FindObjectsSortMode.None))
+        {
+            if (Vector3.Distance(person.transform.position, cell) <= radius)
+                person.Blast(cell, radius);
         }
     }
 
@@ -120,13 +140,13 @@ public class Tnt : MonoBehaviour
         Light glow = gameObject.AddComponent<Light>();
         glow.type = LightType.Point;
         glow.color = new Color(1f, 0.6f, 0.2f);
-        glow.range = BlastRadius * 4f;
+        glow.range = radius * 4f;
 
         const float duration = 0.3f;
 
         for (float t = 0f; t < 1f; t += Time.deltaTime / duration)
         {
-            ball.transform.localScale = Vector3.one * BlastRadius * 2f * t;
+            ball.transform.localScale = Vector3.one * radius * 2f * t;
             glow.intensity = 6f * (1f - t);
             yield return null;
         }

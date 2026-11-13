@@ -10,6 +10,8 @@ public class FirstPersonPlayer : MonoBehaviour
     public float gravity = 20f;
 
     public float swimSpeed = 4f;
+    public float bounceSpeed = 16f;   // how hard a bounce pad throws you up
+    public float iceGrip = 1f;        // on ice, how many times walk speed you can speed up or slow down by each second - lower is slippier
 
     [Header("Looking")]
     public float lookSensitivity = 2.5f;
@@ -25,25 +27,42 @@ public class FirstPersonPlayer : MonoBehaviour
     private float pitch;
     private float verticalSpeed;
     private bool wasSwimming;
+    private Vector3 slide;   // how fast we're really going sideways, which on ice lags behind the keys
+
+    // How far up or down we're looking, so a saved world can put it back
+    public float Pitch
+    {
+        get { return pitch; }
+        set { pitch = value; }
+    }
 
     void Start()
     {
         controller = GetComponent<CharacterController>();
         head = Camera.main.transform;
+        head.localRotation = Quaternion.Euler(pitch, 0f, 0f);
         LockMouse(true);
     }
 
     void Update()
     {
-        // Escape lets go of the mouse so you can get back to the Unity editor.
-        // Click the game or press Enter to carry on playing.
-        if (Input.GetKeyDown(KeyCode.Escape))
-            LockMouse(false);
-        else if ((Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Return)) && Cursor.lockState != CursorLockMode.Locked)
-            LockMouse(true);
+        // While the inventory is open, keys and clicks belong to it. We still
+        // fall and sink, but can't walk, look around, or pause.
+        bool inInventory = BlockInteractor.InventoryOpen || Time.frameCount == BlockInteractor.InventoryClosedFrame;
 
-        Look();
-        Move();
+        if (!inInventory)
+        {
+            // Escape lets go of the mouse so you can get back to the Unity editor.
+            // Click the game or press Enter to carry on playing.
+            if (Input.GetKeyDown(KeyCode.Escape))
+                LockMouse(false);
+            else if ((Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Return)) && Cursor.lockState != CursorLockMode.Locked)
+                LockMouse(true);
+
+            Look();
+        }
+
+        Move(inInventory);
     }
 
     void LockMouse(bool locked)
@@ -76,27 +95,36 @@ public class FirstPersonPlayer : MonoBehaviour
         head.localRotation = Quaternion.Euler(pitch, 0f, 0f);
     }
 
-    void Move()
+    void Move(bool ignoreKeys)
     {
         // WASD only - Unity's built-in "Horizontal" and "Vertical" would also
         // walk us around with the arrow keys, and those are for looking
-        float sideways = KeyPair(KeyCode.A, KeyCode.D);
-        float forwards = KeyPair(KeyCode.S, KeyCode.W);
+        float sideways = ignoreKeys ? 0f : KeyPair(KeyCode.A, KeyCode.D);
+        float forwards = ignoreKeys ? 0f : KeyPair(KeyCode.S, KeyCode.W);
+        bool spaceHeld = !ignoreKeys && Input.GetKey(KeyCode.Space);
+        bool spacePressed = !ignoreKeys && Input.GetKeyDown(KeyCode.Space);
 
         Vector3 move = (transform.right * sideways + transform.forward * forwards).normalized * walkSpeed;
         bool swimming = InWater();
+
+        // On ice you keep sliding, and it takes a while to get going or stop
+        if (controller.isGrounded && BlockUnderFeet() == BlockWorld.Ice)
+            slide = Vector3.MoveTowards(slide, move, iceGrip * walkSpeed * Time.deltaTime);
+        else
+            slide = move;
+        move = slide;
 
         if (swimming)
         {
             move *= 0.6f;   // water slows you down
 
             // Hold Space to swim up, otherwise sink gently
-            if (Input.GetKey(KeyCode.Space))
+            if (spaceHeld)
                 verticalSpeed = swimSpeed;
             else
                 verticalSpeed = Mathf.Max(verticalSpeed - gravity * 0.25f * Time.deltaTime, -2f);
         }
-        else if (wasSwimming && Input.GetKey(KeyCode.Space))
+        else if (wasSwimming && spaceHeld)
         {
             verticalSpeed = jumpSpeed;   // a hop as we reach the surface, so we can climb out onto the shore
         }
@@ -104,7 +132,9 @@ public class FirstPersonPlayer : MonoBehaviour
         {
             verticalSpeed = -1f;   // a little downward push keeps us stuck to the floor
 
-            if (Input.GetKeyDown(KeyCode.Space))
+            if (BlockUnderFeet() == BlockWorld.BouncePad)
+                verticalSpeed = bounceSpeed;   // boing!
+            else if (spacePressed)
                 verticalSpeed = jumpSpeed;
         }
         else
@@ -119,6 +149,14 @@ public class FirstPersonPlayer : MonoBehaviour
         // Fell off the edge of the world? Back to the start.
         if (transform.position.y < -20f)
             Respawn();
+    }
+
+    byte BlockUnderFeet()
+    {
+        if (BlockWorld.Instance == null) return BlockWorld.Air;
+
+        Vector3Int under = Vector3Int.RoundToInt(transform.position + Vector3.down * 0.3f);
+        return BlockWorld.Instance.GetBlock(under.x, under.y, under.z);
     }
 
     bool InWater()
