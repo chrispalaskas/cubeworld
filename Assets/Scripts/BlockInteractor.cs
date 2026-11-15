@@ -2,7 +2,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 // Breaking blocks, placing blocks, and choosing which block to place.
-// The crafting table screen lives in CraftingTable.cs, and swords in Swords.cs.
+// The crafting table screen lives in CraftingTable.cs, swords in Swords.cs,
+// chests in Chests.cs and wings in Wings.cs.
 public partial class BlockInteractor : MonoBehaviour
 {
     [Tooltip("How far away you can reach, in blocks")]
@@ -20,6 +21,19 @@ public partial class BlockInteractor : MonoBehaviour
 
     // And this one hatches a little person
     const byte VillagerEgg = 48;
+    const byte MagicVillagerEgg = 54;
+
+    // Place it and a whole rainbow arch appears
+    const byte RainbowArch = 55;
+
+    // Hatches a unicorn (after the mushroom blocks, 63 and 64)
+    const byte UnicornEgg = 65;
+
+    // Hatches a dragon (66 is the wings)
+    const byte DragonEgg = 67;
+
+    // Hatches a fire villager (after the Nether blocks, 68 to 74)
+    const byte FireVillagerEgg = 75;
 
     // More things you place that aren't blocks: a sapling grows into a tree,
     // and a firework shoots up into the sky
@@ -46,9 +60,18 @@ public partial class BlockInteractor : MonoBehaviour
         BlockWorld.Rainbow, BlockWorld.Bookshelf, Sapling, FireworkRocket, WoodenSword,
         StoneSword, IronSword, GoldSword, DiamondSword, BlockWorld.StairsNorth, BlockWorld.DoorItem,
         VillagerEgg, BlockWorld.Portal, BlockWorld.MagicPortal, BlockWorld.MagicGrass, BlockWorld.Crystal,
-        BlockWorld.Cloud
+        BlockWorld.Cloud, MagicVillagerEgg, RainbowArch, BlockWorld.RainbowRed, BlockWorld.RainbowOrange,
+        BlockWorld.RainbowYellow, BlockWorld.RainbowGreen, BlockWorld.RainbowBlue, BlockWorld.RainbowPurple,
+        BlockWorld.Chest, BlockWorld.MushroomStem, BlockWorld.MushroomCap, UnicornEgg, Wings, DragonEgg,
+        BlockWorld.FirePortal, BlockWorld.EmberRock, BlockWorld.Ash, BlockWorld.Lava, BlockWorld.FireCrystal,
+        BlockWorld.FireVent, BlockWorld.Fire, FireVillagerEgg
     };
-    const int InventoryColumns = 10;
+    // The inventory works out how many columns to use so it fits your screen
+    // (see DrawInventory), and scrolls if it really can't fit
+    private int inventoryColumns = 10;
+    private int inventoryScroll;          // the top row on show
+    private int inventoryRowsShown = 100;
+    private bool inventoryCursorMovedByKeys;
 
     // Names, looked up by item number
     static readonly string[] ItemNames =
@@ -61,7 +84,11 @@ public partial class BlockInteractor : MonoBehaviour
         "Stairs", "", "", "",   // (the other three are the same stairs facing other ways)
         "Door",
         "", "", "", "", "", "", "", "",   // (40 to 47 are the halves of a door, once it's placed)
-        "Villager Egg", "Portal", "Magic Portal", "Magic Grass", "Crystal", "Cloud"
+        "Villager Egg", "Portal", "Magic Portal", "Magic Grass", "Crystal", "Cloud",
+        "Magic Villager Egg", "Rainbow",
+        "Glowing Red", "Glowing Orange", "Glowing Yellow", "Glowing Green", "Glowing Blue", "Glowing Purple",
+        "Chest", "Mushroom Stem", "Mushroom Cap", "Unicorn Egg", "Wings", "Dragon Egg",
+        "Fire Portal", "Ember Rock", "Ash", "Lava", "Fire Crystal", "Fire Vent", "Fire", "Fire Villager Egg"
     };
 
     // While the inventory is open, other scripts leave the keys and mouse alone.
@@ -102,6 +129,7 @@ public partial class BlockInteractor : MonoBehaviour
         if (InventoryOpen)
         {
             if (crafting) CraftingKeys();
+            else if (chestOpen) ChestKeys();
             else InventoryKeys();
             return;
         }
@@ -117,7 +145,10 @@ public partial class BlockInteractor : MonoBehaviour
 
         if (Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Q))
         {
-            if (selected == Sponge)
+            Dragon dragon = GetComponent<FirstPersonPlayer>().RidingOn as Dragon;
+            if (dragon != null)
+                dragon.BreatheFire(cam.transform.forward);   // riding a dragon? Fire!
+            else if (selected == Sponge)
                 WipeWater();
             else if (selected == Leash)
                 UseLeash();
@@ -129,8 +160,25 @@ public partial class BlockInteractor : MonoBehaviour
         else if (Input.GetMouseButtonDown(1) || Input.GetKeyDown(KeyCode.E))
         {
             Vector3Int door;
-            if (LookingAtCraftingTable())
+            Vector3Int chest;
+            MonoBehaviour mount;
+            FirstPersonPlayer me = GetComponent<FirstPersonPlayer>();
+
+            if (me.IsRiding)
+                me.Dismount();   // E again gets you off
+            else if (LookingAtRideable(out mount))
+            {
+                if (caughtAnimal == mount)
+                {
+                    caughtAnimal = null;   // no need for the leash once you're on its back
+                    ((ILeashable)mount).Release();
+                }
+                me.Mount(mount);
+            }
+            else if (LookingAtCraftingTable())
                 OpenCrafting();
+            else if (LookingAtChest(out chest))
+                OpenChest(chest);
             else if (LookingAtDoor(out door))
                 OpenOrCloseDoor(door);
             else
@@ -147,8 +195,15 @@ public partial class BlockInteractor : MonoBehaviour
             if (Input.GetKeyDown(key)) slot = i;
         }
 
-        // ...and the mouse wheel steps along, wrapping round at the ends
+        // ...and the mouse wheel steps along, wrapping round at the ends.
+        // (With the inventory open, the wheel scrolls the inventory instead.)
         float scroll = Input.mouseScrollDelta.y;
+        if (InventoryOpen && !crafting && !chestOpen)
+        {
+            if (scroll < 0f) inventoryScroll++;
+            if (scroll > 0f) inventoryScroll--;
+            return;
+        }
         if (scroll < 0f) slot = (slot + 1) % hotbar.Length;
         if (scroll > 0f) slot = (slot + hotbar.Length - 1) % hotbar.Length;
     }
@@ -167,15 +222,34 @@ public partial class BlockInteractor : MonoBehaviour
         if (BlockWorld.Instance == null) return false;
         if (hit.transform.parent != BlockWorld.Instance.transform) return false;
 
-        // Every cube sits exactly on a whole number, so its position IS its grid cell
-        Vector3 p = hit.transform.position;
-        block = new Vector3Int(Mathf.RoundToInt(p.x), Mathf.RoundToInt(p.y), Mathf.RoundToInt(p.z));
+        if (hit.collider is MeshCollider)
+        {
+            // A chunk: we hit the face of a block, so step half a block back
+            // from that face to land in the middle of the block itself
+            block = Vector3Int.RoundToInt(hit.point - hit.normal * 0.5f);
+        }
+        else
+        {
+            // Stairs, doors and lamps sit exactly on a whole number,
+            // so their position IS their grid cell
+            block = Vector3Int.RoundToInt(hit.transform.position);
+        }
         spaceInFront = block + Vector3Int.RoundToInt(hit.normal);
         return true;
     }
 
     void Break()
     {
+        // Lava and fire have nothing solid for the aim to hit, so they're
+        // found by creeping along the line of sight, like water is.
+        // (Left click on a fire puts it out.)
+        Vector3Int lava;
+        if (LookingAtLavaOrFire(out lava))
+        {
+            BlockWorld.Instance.SetBlock(lava.x, lava.y, lava.z, BlockWorld.Air);
+            return;
+        }
+
         Vector3Int block, unused;
         if (!LookingAtBlock(out block, out unused)) return;
 
@@ -202,6 +276,23 @@ public partial class BlockInteractor : MonoBehaviour
         }
 
         water = Vector3Int.zero;
+        return false;
+    }
+
+    // The first lava or fire along the line of sight, if we reach it before anything solid
+    bool LookingAtLavaOrFire(out Vector3Int lava)
+    {
+        for (float distance = 0f; distance <= reach; distance += 0.05f)
+        {
+            Vector3 point = cam.transform.position + cam.transform.forward * distance;
+            lava = Vector3Int.RoundToInt(point);
+
+            byte type = BlockWorld.Instance.GetBlock(lava.x, lava.y, lava.z);
+            if (type == BlockWorld.Lava || type == BlockWorld.Fire) return true;
+            if (type != BlockWorld.Air && type != BlockWorld.Water) return false;
+        }
+
+        lava = Vector3Int.zero;
         return false;
     }
 
@@ -243,7 +334,7 @@ public partial class BlockInteractor : MonoBehaviour
 
     void Place()
     {
-        if (selected == Sponge || selected == Leash || IsSword(selected)) return;
+        if (selected == Sponge || selected == Leash || IsSword(selected) || selected == Wings) return;
 
         Vector3Int unused, target;
         if (selected == BlockWorld.Water)
@@ -253,7 +344,8 @@ public partial class BlockInteractor : MonoBehaviour
         else if (!LookingAtBlock(out unused, out target)) return;
 
         byte there = BlockWorld.Instance.GetBlock(target.x, target.y, target.z);
-        if (there != BlockWorld.Air && there != BlockWorld.Water) return;   // you can build into water
+        if (there != BlockWorld.Air && there != BlockWorld.Water && there != BlockWorld.Lava && there != BlockWorld.Fire)
+            return;   // you can build into water, lava and fire
 
         // An egg isn't a block - a chicken hatches out, standing in that space
         if (selected == ChickenEgg)
@@ -265,6 +357,36 @@ public partial class BlockInteractor : MonoBehaviour
         if (selected == VillagerEgg)
         {
             Villager.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
+            return;
+        }
+
+        if (selected == MagicVillagerEgg)
+        {
+            Villager.HatchMagic(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
+            return;
+        }
+
+        if (selected == FireVillagerEgg)
+        {
+            Villager.HatchFire(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
+            return;
+        }
+
+        if (selected == DragonEgg)
+        {
+            Dragon.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
+            return;
+        }
+
+        if (selected == UnicornEgg)
+        {
+            Unicorn.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
+            return;
+        }
+
+        if (selected == RainbowArch)
+        {
+            BlockWorld.Instance.BuildRainbow(target, transform.forward);
             return;
         }
 
@@ -378,6 +500,7 @@ public partial class BlockInteractor : MonoBehaviour
     {
         InventoryOpen = false;
         crafting = false;
+        chestOpen = false;
         InventoryClosedFrame = Time.frameCount;
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
@@ -395,8 +518,11 @@ public partial class BlockInteractor : MonoBehaviour
         int count = AllItems.Length;
         if (Input.GetKeyDown(KeyCode.RightArrow)) inventoryCursor = (inventoryCursor + 1) % count;
         if (Input.GetKeyDown(KeyCode.LeftArrow))  inventoryCursor = (inventoryCursor + count - 1) % count;
-        if (Input.GetKeyDown(KeyCode.DownArrow) && inventoryCursor + InventoryColumns < count) inventoryCursor += InventoryColumns;
-        if (Input.GetKeyDown(KeyCode.UpArrow) && inventoryCursor - InventoryColumns >= 0) inventoryCursor -= InventoryColumns;
+        if (Input.GetKeyDown(KeyCode.DownArrow) && inventoryCursor + inventoryColumns < count) inventoryCursor += inventoryColumns;
+        if (Input.GetKeyDown(KeyCode.UpArrow) && inventoryCursor - inventoryColumns >= 0) inventoryCursor -= inventoryColumns;
+        if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.LeftArrow) ||
+            Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.UpArrow))
+            inventoryCursorMovedByKeys = true;   // so the view scrolls to follow it
 
         if (EnterPressed())
             PutInHotbar(AllItems[inventoryCursor]);
@@ -476,13 +602,30 @@ public partial class BlockInteractor : MonoBehaviour
         foreach (Villager person in FindObjectsByType<Villager>(FindObjectsSortMode.None))
             CheckAnimal(person, ref closest, ref closestDistance);
 
+        foreach (Unicorn unicorn in FindObjectsByType<Unicorn>(FindObjectsSortMode.None))
+            CheckAnimal(unicorn, ref closest, ref closestDistance);
+
+        foreach (Dragon dragon in FindObjectsByType<Dragon>(FindObjectsSortMode.None))
+            CheckAnimal(dragon, ref closest, ref closestDistance);
+
         return closest;
+    }
+
+    // A unicorn or dragon close enough to climb on
+    bool LookingAtRideable(out MonoBehaviour mount)
+    {
+        mount = AnimalInSights(5f);
+        if (!(mount is IRideable)) mount = null;
+        return mount != null;
     }
 
     // How high above its feet to aim at - people are taller than animals
     static float MiddleHeight(MonoBehaviour animal)
     {
-        return animal is Villager ? 0.6f : 0.25f;
+        if (animal is Villager) return 0.6f;
+        if (animal is Unicorn) return 0.55f;
+        if (animal is Dragon) return 0.9f;
+        return 0.25f;
     }
 
     void CheckAnimal(MonoBehaviour animal, ref MonoBehaviour closest, ref float closestDistance)
@@ -491,7 +634,8 @@ public partial class BlockInteractor : MonoBehaviour
         float along = Vector3.Dot(toAnimal, cam.transform.forward);
 
         if (along < 0f || along > closestDistance) return;                               // behind us or too far
-        if ((toAnimal - cam.transform.forward * along).magnitude > 0.6f) return;         // not lined up
+        float size = animal is Dragon ? 1.2f : 0.6f;   // dragons are big, so they're easier to aim at
+        if ((toAnimal - cam.transform.forward * along).magnitude > size) return;        // not lined up
         if (WallInTheWay(along)) return;
 
         closest = animal;
@@ -534,6 +678,7 @@ public partial class BlockInteractor : MonoBehaviour
         InventoryOpen = false;
         if (hand != null) Destroy(hand);
         if (rope != null) Destroy(rope);
+        if (wingsView != null) Destroy(wingsView);
     }
 
     // --- The tools in your hand ---
@@ -552,6 +697,7 @@ public partial class BlockInteractor : MonoBehaviour
                     BlockWorld.MakeMaterial(new Color(0.90f, 0.70f, 0.55f)));   // your hand, gripping it from below
 
         BuildSword();
+        BuildWings();
         hand.SetActive(false);
 
         rope = AddHandPart(Vector3.zero, Vector3.one, ropeColour);
@@ -598,6 +744,7 @@ public partial class BlockInteractor : MonoBehaviour
         spongeInHand.SetActive(selected == Sponge);
         leashInHand.SetActive(selected == Leash);
         MoveSword();
+        MoveWings();
 
         squeezeTime = Mathf.Max(squeezeTime - Time.deltaTime, 0f);
         hand.transform.localPosition = squeezeTime > 0f ? Vector3.down * 0.06f : Vector3.zero;
@@ -615,9 +762,10 @@ public partial class BlockInteractor : MonoBehaviour
         GUI.Label(new Rect(12, 30, 800, 24), "Q or left click: break / wipe water / leash / swing sword   E or right click: place / open door   Esc frees mouse, Enter returns");
         GUI.Label(new Rect(12, 50, 800, 24), "1-9, 0 or mouse wheel: choose from the hotbar");
 
-        GUI.Label(new Rect(12, 70, 800, 24), "I or Tab: inventory   E or right click on a crafting table: craft");
+        GUI.Label(new Rect(12, 70, 800, 24), "I or Tab: inventory   E or right click on a crafting table or chest: open it   E on a unicorn or dragon: ride (Space flies)");
 
         if (InventoryOpen && crafting) DrawCrafting();
+        else if (InventoryOpen && chestOpen) DrawChest();
         else if (InventoryOpen) DrawInventory();
         DrawHotbar();
     }
@@ -639,13 +787,25 @@ public partial class BlockInteractor : MonoBehaviour
             GUI.color = new Color(0.55f, 0.38f, 0.20f);
             GUI.DrawTexture(icon, Texture2D.whiteTexture);
         }
-        else if (item == ChickenEgg || item == VillagerEgg)
+        else if (item == ChickenEgg || item == VillagerEgg || item == MagicVillagerEgg || item == UnicornEgg || item == DragonEgg || item == FireVillagerEgg)
         {
-            GUI.DrawTexture(icon, EggPicture(item == VillagerEgg));
+            GUI.DrawTexture(icon, EggPicture(item));
         }
         else if (item == Sapling || item == FireworkRocket)
         {
             GUI.DrawTexture(icon, item == Sapling ? SaplingPicture() : FireworkPicture());
+        }
+        else if (item == RainbowArch)
+        {
+            GUI.DrawTexture(icon, RainbowPicture());
+        }
+        else if (item == Wings)
+        {
+            GUI.DrawTexture(icon, WingsPicture());
+        }
+        else if (item == BlockWorld.Fire)
+        {
+            GUI.DrawTexture(icon, FirePicture());
         }
         else if (IsSword(item))
         {
@@ -675,17 +835,57 @@ public partial class BlockInteractor : MonoBehaviour
         GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
         GUI.color = before;
 
+        // Room for the grid: the whole screen, less the title above it and
+        // the item name, help and hotbar below it
         const float gap = 6f;
-        float size = Mathf.Min(56f, (Screen.width - 48f) / InventoryColumns - gap);
-        int rows = (AllItems.Length + InventoryColumns - 1) / InventoryColumns;
-        float width = InventoryColumns * (size + gap) - gap;
-        float left = (Screen.width - width) / 2f;
-        float top = Screen.height * 0.25f;
+        const float smallest = 34f;   // any smaller and the pictures are hard to make out
+        int count = AllItems.Length;
+        float roomWide = Screen.width - 64f;
+        float roomHigh = Screen.height - 250f;
 
-        GUI.Box(new Rect(left - 16, top - 60, width + 32, rows * (size + gap) + 110), "");
-        GUI.Label(new Rect(left, top - 52, width, 24), "Inventory", centredLabel);
-        GUI.Label(new Rect(left, top - 30, width, 24),
-                  "Click an item, or use the arrows and Enter, to put it in hotbar slot " + SlotKeys[slot] + ".");
+        // Try different numbers of columns, and keep whichever makes the
+        // boxes biggest while still fitting everything on the screen
+        float size = 0f;
+        for (int columns = 8; columns <= 24; columns++)
+        {
+            int rowsNeeded = (count + columns - 1) / columns;
+            float fits = Mathf.Min(60f, roomWide / columns - gap, roomHigh / rowsNeeded - gap);
+            if (fits > size + 0.01f)
+            {
+                size = fits;
+                inventoryColumns = columns;
+            }
+        }
+
+        // A really small window? Keep the boxes big enough to see, and scroll
+        if (size < smallest)
+        {
+            size = Mathf.Min(smallest, roomWide / 8f - gap);
+            inventoryColumns = Mathf.Clamp(Mathf.FloorToInt((roomWide + gap) / (size + gap)), 1, count);
+        }
+
+        int rows = (count + inventoryColumns - 1) / inventoryColumns;
+        inventoryRowsShown = Mathf.Clamp(Mathf.FloorToInt((roomHigh + gap) / (size + gap)), 1, rows);
+
+        // Arrow keys moved the highlight off the screen? Scroll to follow it
+        int cursorRow = inventoryCursor / inventoryColumns;
+        if (inventoryCursorMovedByKeys)
+        {
+            if (cursorRow < inventoryScroll) inventoryScroll = cursorRow;
+            if (cursorRow >= inventoryScroll + inventoryRowsShown) inventoryScroll = cursorRow - inventoryRowsShown + 1;
+            inventoryCursorMovedByKeys = false;
+        }
+        inventoryScroll = Mathf.Clamp(inventoryScroll, 0, rows - inventoryRowsShown);
+
+        float width = inventoryColumns * (size + gap) - gap;
+        float height = inventoryRowsShown * (size + gap) - gap;
+        float left = (Screen.width - width) / 2f;
+        const float top = 80f;
+
+        GUI.Box(new Rect(left - 16, top - 64, width + 32, height + 120), "");
+        GUI.Label(new Rect(left, top - 56, width, 24), "Inventory", centredLabel);
+        GUI.Label(new Rect(left, top - 34, width, 24),
+                  "Click an item, or use the arrows and Enter, to put it in hotbar slot " + SlotKeys[slot] + ".", centredLabel);
 
         Event e = Event.current;
 
@@ -693,9 +893,12 @@ public partial class BlockInteractor : MonoBehaviour
         bool mouseMoved = e.type == EventType.Repaint && e.mousePosition != lastMouse;
         if (e.type == EventType.Repaint) lastMouse = e.mousePosition;
 
-        for (int i = 0; i < AllItems.Length; i++)
+        int first = inventoryScroll * inventoryColumns;
+        int last = Mathf.Min(count, first + inventoryRowsShown * inventoryColumns);
+        for (int i = first; i < last; i++)
         {
-            Rect box = new Rect(left + (i % InventoryColumns) * (size + gap), top + (i / InventoryColumns) * (size + gap), size, size);
+            int column = i % inventoryColumns, row = i / inventoryColumns - inventoryScroll;
+            Rect box = new Rect(left + column * (size + gap), top + row * (size + gap), size, size);
 
             if (mouseMoved && box.Contains(e.mousePosition)) inventoryCursor = i;
 
@@ -722,12 +925,20 @@ public partial class BlockInteractor : MonoBehaviour
                 GUI.Label(box, "?", centredLabel);
         }
 
-        float under = top + rows * (size + gap) + 4;
+        float under = top + height + 6;
         byte pointedAt = AllItems[inventoryCursor];
         GUI.Label(new Rect(left, under, width, 24),
                   HaveGot(pointedAt) ? ItemNames[pointedAt] : "??? - make it at a crafting table to find out", centredLabel);
-        GUI.Label(new Rect(left, under + 22, width, 24), "1-9, 0 or click the hotbar: choose a slot     I, Tab or Esc: close");
+
+        string help = "1-9, 0 or click the hotbar: choose a slot     I, Tab or Esc: close";
+        if (rows > inventoryRowsShown)
+        {
+            int more = rows - inventoryRowsShown;
+            help = "Mouse wheel or arrows: scroll for more (row " + (inventoryScroll + 1) + " of " + (more + 1) + ")     " + help;
+        }
+        GUI.Label(new Rect(left - 16, under + 24, width + 32, 24), help, centredLabel);
     }
+
 
     // A row of slots along the bottom of the screen, with the picked one outlined
     void DrawHotbar()

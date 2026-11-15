@@ -62,6 +62,11 @@ public class GameBootstrap : MonoBehaviour
         Squirrel.SpawnAll(world);
         ChickenRespawner.Begin(world);
         Villager.SpawnAll(world);
+        Villager.SpawnMagicFolk(world);
+        Villager.SpawnFireFolk(world);
+        Unicorn.SpawnAll(world);
+        Dragon.SpawnAll(world);
+        if (WorldMenu.CurrentPlace == WorldSaves.Nether) NetherFire.Begin();
 
         return walker;
     }
@@ -82,6 +87,9 @@ public class GameBootstrap : MonoBehaviour
         DestroyAll<Chicken>();
         DestroyAll<ChickenRespawner>();
         DestroyAll<Villager>();
+        DestroyAll<Unicorn>();
+        DestroyAll<Dragon>();
+        DestroyAll<NetherFire>();
         DestroyAll<FirstPersonPlayer>();
         DestroyAll<BlockWorld>();
     }

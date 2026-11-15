@@ -30,6 +30,11 @@ public class WorldMenu : MonoBehaviour
 
     bool Playing { get { return world != null; } }
 
+    // Which world (0 to 2, or -1 on the menu) and which place in it is open,
+    // so magic villagers know where they are
+    public static int CurrentSlot { get { return instance != null && instance.Playing ? instance.currentSlot : -1; } }
+    public static int CurrentPlace { get { return instance != null ? instance.currentPlace : WorldSaves.Home; } }
+
     void Awake()
     {
         instance = this;
@@ -80,7 +85,8 @@ public class WorldMenu : MonoBehaviour
     bool Enter(int slot, int place)
     {
         bool magic = place == WorldSaves.MagicLand;
-        world = new GameObject(magic ? "Magic Land" : "World").AddComponent<BlockWorld>();
+        bool nether = place == WorldSaves.Nether;
+        world = new GameObject(magic ? "Magic Land" : nether ? "Nether" : "World").AddComponent<BlockWorld>();
         Vector3 position;
         float yaw, pitch;
         bool brandNew = !WorldSaves.Exists(slot, place);
@@ -88,19 +94,22 @@ public class WorldMenu : MonoBehaviour
         if (brandNew)
         {
             if (magic) world.GenerateMagicLand();
+            else if (nether) world.GenerateNether();
             else world.Generate();
 
             position = world.FindSpawnPoint();
             yaw = 0f;
             pitch = 0f;
 
-            if (magic) world.PlaceReturnPortal(position);   // a way back home, right next to you
+            // A way back home, right next to you
+            if (magic) world.PlaceReturnPortal(position, BlockWorld.MagicPortal, BlockWorld.MagicGrass);
+            if (nether) world.PlaceReturnPortal(position, BlockWorld.FirePortal, BlockWorld.Ash);
         }
         else if (!WorldSaves.Load(slot, place, world, out position, out yaw, out pitch))
         {
             Destroy(world.gameObject);
             world = null;
-            problem = "World " + (slot + 1) + (magic ? "'s Magic Land" : "") +
+            problem = "World " + (slot + 1) + (magic ? "'s Magic Land" : nether ? "'s Nether" : "") +
                       " couldn't be loaded - the save may be damaged. You can delete it and start a new one.";
             return false;
         }
@@ -117,23 +126,50 @@ public class WorldMenu : MonoBehaviour
         return true;
     }
 
-    // A magic portal was stepped on: save here, and go to the other place
+    // A magic portal was stepped on: to the Magic Land - or, from there, back home
     public static void TravelThroughMagicPortal()
     {
-        if (instance != null && instance.Playing) instance.Travel();
+        if (instance != null && instance.Playing)
+            instance.Travel(instance.currentPlace == WorldSaves.MagicLand ? WorldSaves.Home : WorldSaves.MagicLand);
     }
 
-    void Travel()
+    // A fire portal: to the Nether - or, from there, back home
+    public static void TravelThroughFirePortal()
     {
+        if (instance != null && instance.Playing)
+            instance.Travel(instance.currentPlace == WorldSaves.Nether ? WorldSaves.Home : WorldSaves.Nether);
+    }
+
+    // Saves the place you're leaving, and opens the one you're going to
+    void Travel(int destination)
+    {
+        // Between home and the Magic Land, a villager or unicorn on your leash
+        // (or the unicorn you're riding) comes with you
+        bool magicTrip = destination + currentPlace == WorldSaves.Home + WorldSaves.MagicLand;
+        bool wasRiding = false;
+        if (magicTrip)
+        {
+            foreach (Villager person in FindObjectsByType<Villager>(FindObjectsSortMode.None))
+                if (person.IsOnLeash)
+                    person.GoThroughPortal();
+
+            wasRiding = player != null && player.RidingOn is Unicorn;
+            foreach (Unicorn unicorn in FindObjectsByType<Unicorn>(FindObjectsSortMode.None))
+                if (unicorn.OnLeashOrRidden)
+                    unicorn.GoThroughPortal();
+        }
+
         Save();
         GameBootstrap.EndGame();
         world = null;
         player = null;
 
-        int destination = currentPlace == WorldSaves.Home ? WorldSaves.MagicLand : WorldSaves.Home;
         if (Enter(currentSlot, destination))
         {
-            arrivalMessage = destination == WorldSaves.MagicLand ? "Welcome to the Magic Land!" : "Welcome home!";
+            if (wasRiding) player.MountNearestUnicornOnStart = true;   // still on its back when you arrive
+            arrivalMessage = destination == WorldSaves.MagicLand ? "Welcome to the Magic Land!"
+                           : destination == WorldSaves.Nether ? "Welcome to the Nether!"
+                           : "Welcome home!";
             arrivalTime = Time.time;
         }
         else
@@ -144,24 +180,30 @@ public class WorldMenu : MonoBehaviour
         }
     }
 
-    // The Magic Land has a purple sky with a purple haze in the distance
+    // The Magic Land has a purple sky with a purple haze in the distance.
+    // The Nether has a dark red sky, thick red smoke, and fiery orange sunlight.
     static void SetSky(int place)
     {
         Camera cam = Camera.main;
-        bool magic = place == WorldSaves.MagicLand;
-        Color purple = new Color(0.38f, 0.22f, 0.55f);
+        bool home = place == WorldSaves.Home;
+        bool nether = place == WorldSaves.Nether;
+        Color sky = nether ? new Color(0.30f, 0.07f, 0.04f) : new Color(0.38f, 0.22f, 0.55f);
 
         if (cam != null)
         {
-            cam.clearFlags = magic ? CameraClearFlags.SolidColor : CameraClearFlags.Skybox;
-            cam.backgroundColor = purple;
+            cam.clearFlags = home ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor;
+            cam.backgroundColor = sky;
         }
 
-        RenderSettings.fog = magic;
-        RenderSettings.fogColor = purple;
+        RenderSettings.fog = !home;
+        RenderSettings.fogColor = sky;
         RenderSettings.fogMode = FogMode.Linear;
-        RenderSettings.fogStartDistance = 25f;
-        RenderSettings.fogEndDistance = 80f;
+        RenderSettings.fogStartDistance = nether ? 15f : 25f;
+        RenderSettings.fogEndDistance = nether ? 65f : 80f;
+
+        foreach (Light light in FindObjectsByType<Light>(FindObjectsSortMode.None))
+            if (light.type == LightType.Directional)
+                light.color = nether ? new Color(1.00f, 0.55f, 0.35f) : Color.white;
     }
 
     void Save()
@@ -334,7 +376,7 @@ public class WorldMenu : MonoBehaviour
         Rect box = new Rect((Screen.width - width) / 2f, Screen.height / 2f - 80f, width, 160);
         GUI.Box(box, "");
 
-        string where = currentPlace == WorldSaves.MagicLand ? " (Magic Land)" : "";
+        string where = currentPlace == WorldSaves.MagicLand ? " (Magic Land)" : currentPlace == WorldSaves.Nether ? " (Nether)" : "";
         GUI.Label(new Rect(box.x + 20, box.y + 14, width - 40, 30), "Paused - World " + (currentSlot + 1) + where, bigLabelStyle);
         GUI.Label(new Rect(box.x + 20, box.y + 54, width - 40, 24), "Enter or click: keep playing");
         GUI.Label(new Rect(box.x + 20, box.y + 80, width - 40, 24), "M: save and go back to the world menu");

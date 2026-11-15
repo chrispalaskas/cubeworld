@@ -10,10 +10,22 @@ using UnityEngine;
 // stepped off it. Otherwise you'd bounce back and forth forever.
 public class PortalTraveller : MonoBehaviour
 {
+    private static PortalTraveller instance;
     private bool waitingToStepOff = true;   // true at the start too, in case a save put us on a portal
     private string message = "";
     private float messageUntil;
     private GUIStyle messageStyle;
+
+    void Awake()
+    {
+        instance = this;
+    }
+
+    // Shows a message in the middle of the screen, like "Luna went through the portal!"
+    public static void Announce(string words)
+    {
+        if (instance != null) instance.Say(words);
+    }
 
     void Update()
     {
@@ -22,7 +34,7 @@ public class PortalTraveller : MonoBehaviour
 
         Vector3Int under = Vector3Int.RoundToInt(transform.position + Vector3.down * 0.3f);
         byte type = world.GetBlock(under.x, under.y, under.z);
-        bool onPortal = type == BlockWorld.Portal || type == BlockWorld.MagicPortal;
+        bool onPortal = type == BlockWorld.Portal || type == BlockWorld.MagicPortal || type == BlockWorld.FirePortal;
 
         if (!onPortal)
         {
@@ -34,6 +46,8 @@ public class PortalTraveller : MonoBehaviour
 
         if (type == BlockWorld.MagicPortal)
             WorldMenu.TravelThroughMagicPortal();
+        else if (type == BlockWorld.FirePortal)
+            WorldMenu.TravelThroughFirePortal();
         else
             JumpToNextPortal(world, under);
     }
@@ -58,7 +72,7 @@ public class PortalTraveller : MonoBehaviour
 
     // Goes through every block in the world in order, starting just after
     // the portal we're on and wrapping round, so each portal leads to the next
-    bool FindNextPortal(BlockWorld world, Vector3Int from, out Vector3Int found)
+    public static bool FindNextPortal(BlockWorld world, Vector3Int from, out Vector3Int found)
     {
         int sizeYZ = BlockWorld.SizeY * BlockWorld.SizeZ;
         int total = BlockWorld.SizeX * sizeYZ;

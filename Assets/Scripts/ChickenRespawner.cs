@@ -5,7 +5,8 @@ using UnityEngine;
 // then brings back one lost chicken every so often.
 public class ChickenRespawner : MonoBehaviour
 {
-    const int FlockSize = 12;
+    // A bigger world has room for more chickens: 12 in a small world, up to 30
+    static int FlockSize { get { return Mathf.Clamp(BlockWorld.SizeX * BlockWorld.SizeZ / 340, 12, 30); } }
     const float SecondsBetweenChickens = 10f;
 
     private static ChickenRespawner instance;

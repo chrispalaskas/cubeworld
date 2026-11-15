@@ -70,6 +70,22 @@ public partial class BlockInteractor
 
         // Only a diamond sword is strong enough to defeat a person.
         // Any other sword and they just say "Ouch!" and run off.
+        // Dragons are far too tough: no harm done, but off they fly
+        Dragon dragon = animal as Dragon;
+        if (dragon != null)
+        {
+            dragon.Startle(transform.position);
+            return;
+        }
+
+        // Unicorns are magic: no harm done, but off they gallop
+        Unicorn unicorn = animal as Unicorn;
+        if (unicorn != null)
+        {
+            unicorn.Startle(transform.position);
+            return;
+        }
+
         Villager person = animal as Villager;
         if (person != null)
         {

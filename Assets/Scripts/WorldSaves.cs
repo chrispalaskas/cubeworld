@@ -14,6 +14,13 @@ public static class WorldSaves
 
     public const int Home = 0;
     public const int MagicLand = 1;
+    public const int Nether = 2;     // the land of fire and dragons, through a fire portal
+
+    // A short name for each place, used in file names and remembered settings
+    public static string PlaceName(int place)
+    {
+        return place == MagicLand ? "magic" : place == Nether ? "nether" : "home";
+    }
 
     // Bump this if the file layout ever changes, so old saves are spotted
     // instead of being read wrongly
@@ -21,7 +28,7 @@ public static class WorldSaves
 
     static string PathFor(int slot, int place)
     {
-        string name = "world" + (slot + 1) + (place == MagicLand ? "-magic" : "");
+        string name = "world" + (slot + 1) + (place == Home ? "" : "-" + PlaceName(place));
         return Path.Combine(Application.persistentDataPath, name + ".save");
     }
 
@@ -35,7 +42,7 @@ public static class WorldSaves
     public static int LastPlace(int slot)
     {
         int place = PlayerPrefs.GetInt("world" + (slot + 1) + "-place", Home);
-        return place == MagicLand && Exists(slot, MagicLand) ? MagicLand : Home;
+        return place != Home && Exists(slot, place) ? place : Home;
     }
 
     public static void SetLastPlace(int slot, int place)
@@ -44,14 +51,19 @@ public static class WorldSaves
         PlayerPrefs.Save();
     }
 
-    // When the world was last saved - home or Magic Land, whichever was
-    // later - or null if it can't be read
+    // When the world was last saved - in whichever of its places was saved
+    // last - or null if it can't be read
     public static DateTime? WhenSaved(int slot)
     {
-        DateTime? home = WhenSaved(slot, Home);
-        DateTime? magic = Exists(slot, MagicLand) ? WhenSaved(slot, MagicLand) : null;
-        if (home.HasValue && magic.HasValue && magic.Value > home.Value) return magic;
-        return home;
+        DateTime? latest = WhenSaved(slot, Home);
+        if (!latest.HasValue) return null;
+
+        foreach (int place in new[] { MagicLand, Nether })
+        {
+            DateTime? other = Exists(slot, place) ? WhenSaved(slot, place) : null;
+            if (other.HasValue && other.Value > latest.Value) latest = other;
+        }
+        return latest;
     }
 
     static DateTime? WhenSaved(int slot, int place)
@@ -130,6 +142,21 @@ public static class WorldSaves
     {
         File.Delete(PathFor(slot, Home));
         File.Delete(PathFor(slot, MagicLand));   // (does nothing if there isn't one)
+        File.Delete(PathFor(slot, Nether));
         SetLastPlace(slot, Home);
+
+        // ...and forgets its magic villagers, so a new world gets new ones
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-magicfolk");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-visitors");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-travellers");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-unicorns-home");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-unicorns-magic");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-unicorns-arriving-home");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-unicorns-arriving-magic");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-dragons-home");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-dragons-magic");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-dragons-nether");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-firefolk");
+        PlayerPrefs.Save();
     }
 }

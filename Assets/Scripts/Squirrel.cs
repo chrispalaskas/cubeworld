@@ -39,7 +39,7 @@ public class Squirrel : MonoBehaviour, ILeashable
         };
         Material eyes = BlockWorld.MakeMaterial(new Color(0.05f, 0.05f, 0.05f));
 
-        int count = Mathf.Min(world.Trees.Count / 3 + 1, 15);
+        int count = Mathf.Min(world.Trees.Count / 3 + 1, 25);
 
         for (int i = 0; i < count; i++)
         {

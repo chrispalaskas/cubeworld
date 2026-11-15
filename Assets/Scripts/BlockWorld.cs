@@ -3,16 +3,31 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// The world is a 3D grid of block numbers. We only keep a real cube object
-// for blocks you can actually SEE - blocks buried inside the ground cost us
-// nothing. That is the trick that keeps this fast.
+// The world is a 3D grid of block numbers. To draw it, the world is cut into
+// "chunks" 16 blocks wide (and the full height of the world), the way
+// Minecraft does it. Each chunk is drawn as ONE shape made only of the block
+// faces you could actually see - faces buried in the ground, or pressed
+// against another block, are left out. That is the trick that keeps a big
+// world fast.
+//
+// A few blocks aren't simple cubes - stairs, doors, and lamps (which carry a
+// light) - so those each get their own little object instead.
 public class BlockWorld : MonoBehaviour
 {
     public static BlockWorld Instance { get; private set; }
 
-    public const int SizeX = 64;
-    public const int SizeY = 32;
-    public const int SizeZ = 64;
+    // How big brand new worlds are. A saved world keeps the size it was made
+    // with, so worlds from before they got bigger still load.
+    public const int NewSizeX = 128;
+    public const int NewSizeY = 48;
+    public const int NewSizeZ = 128;
+
+    // The size of the world that's open right now
+    public static int SizeX { get; private set; } = NewSizeX;
+    public static int SizeY { get; private set; } = NewSizeY;
+    public static int SizeZ { get; private set; } = NewSizeZ;
+
+    const int ChunkSize = 16;
 
     // Any empty space at or below this height fills up with water
     public const int SeaLevel = 11;
@@ -78,10 +93,66 @@ public class BlockWorld : MonoBehaviour
     public const byte Crystal     = 52;
     public const byte Cloud       = 53;
 
+    // (54 is the magic villager egg, and 55 the rainbow you place.)
+    // Six glowing colours, which rainbows are built from.
+    public const byte RainbowRed    = 56;
+    public const byte RainbowOrange = 57;
+    public const byte RainbowYellow = 58;
+    public const byte RainbowGreen  = 59;
+    public const byte RainbowBlue   = 60;
+    public const byte RainbowPurple = 61;
+
+    // A chest keeps blocks inside it (see Chests.cs for the screen)
+    public const byte Chest = 62;
+
+    // Giant mushrooms in the Magic Land. The spotty caps are bouncy!
+    public const byte MushroomStem = 63;
+    public const byte MushroomCap  = 64;
+
+    // (65 to 67 are the unicorn egg, wings and dragon egg.) The Nether:
+    public const byte FirePortal  = 68;   // takes you to the Nether, and back home
+    public const byte EmberRock   = 69;   // dark red rock that the Nether is made of
+    public const byte Ash         = 70;   // soft grey ash on top of the rock
+    public const byte Lava        = 71;   // glowing and runny - far too hot to stay in!
+    public const byte FireCrystal = 72;   // glowing crystals on top of the obsidian spires
+    public const byte FireVent    = 73;   // a crack in the ground that shoots out flames
+    public const byte Fire        = 74;   // flickering flames - hot! You walk into them, not on them
+
+    // What's inside one chest: 27 spaces, each holding up to 64 of one thing
+    public class ChestContents
+    {
+        public const int Spaces = 27;
+        public const int MostInASpace = 64;
+        public readonly byte[] items = new byte[Spaces];    // 0 means the space is empty
+        public readonly byte[] counts = new byte[Spaces];
+    }
+
+    // Every chest in the world, by where it is
+    private readonly Dictionary<Vector3Int, ChestContents> chests = new Dictionary<Vector3Int, ChestContents>();
+
+    // The inside of the chest at this spot (a new, empty one the first time)
+    public ChestContents ChestAt(Vector3Int cell)
+    {
+        ChestContents inside;
+        if (!chests.TryGetValue(cell, out inside))
+        {
+            inside = new ChestContents();
+            chests[cell] = inside;
+        }
+        return inside;
+    }
+
     private byte[,,] blocks;
-    private GameObject[,,] cubes;
-    private byte[,,] cubeBuiltAs;   // which block type each cube was made for
     private Material[] materials;
+
+    // One drawn shape per chunk, and which chunks need redrawing after a change
+    private Chunk[,] chunks;
+    private bool[,] chunkChanged;
+    private bool anyChunkChanged;
+
+    // The stairs, doors and lamps, which are drawn one by one
+    private readonly Dictionary<Vector3Int, GameObject> specials = new Dictionary<Vector3Int, GameObject>();
+    private readonly Dictionary<Vector3Int, byte> specialBuiltAs = new Dictionary<Vector3Int, byte>();
     private Mesh cubeMesh;
 
     public Mesh CubeMesh { get { return cubeMesh; } }
@@ -101,18 +172,30 @@ public class BlockWorld : MonoBehaviour
     void Awake()
     {
         Instance = this;
+        CreateMaterials();
+    }
+
+    // Makes the empty grid. Called first by Generate, GenerateMagicLand and ReadFrom.
+    void MakeEmptyWorld(int sizeX, int sizeY, int sizeZ)
+    {
+        SizeX = sizeX;
+        SizeY = sizeY;
+        SizeZ = sizeZ;
 
         blocks = new byte[SizeX, SizeY, SizeZ];
-        cubes = new GameObject[SizeX, SizeY, SizeZ];
-        cubeBuiltAs = new byte[SizeX, SizeY, SizeZ];
         groundHeight = new int[SizeX, SizeZ];
+        chests.Clear();
 
-        CreateMaterials();
+        int chunksX = (SizeX + ChunkSize - 1) / ChunkSize;
+        int chunksZ = (SizeZ + ChunkSize - 1) / ChunkSize;
+        chunks = new Chunk[chunksX, chunksZ];
+        chunkChanged = new bool[chunksX, chunksZ];
     }
 
     void OnDestroy()
     {
         if (Instance == this) Instance = null;
+        OnDestroyChunks();
     }
 
     // Makes a brand new world. (Loading a saved one uses ReadFrom instead.)
@@ -121,6 +204,8 @@ public class BlockWorld : MonoBehaviour
         int seed = FixedSeed != 0 ? FixedSeed : System.Environment.TickCount;
         random = new System.Random(seed);
         Debug.Log("World seed: " + seed);
+
+        MakeEmptyWorld(NewSizeX, NewSizeY, NewSizeZ);
 
         GenerateHills();
         CarveCaves();
@@ -134,7 +219,7 @@ public class BlockWorld : MonoBehaviour
     {
         // ONE material per block type, shared by every cube of that type.
         // Giving each cube its own material would bring the game to a crawl.
-        materials = new Material[54];
+        materials = new Material[75];
         materials[Grass]  = MakeMaterial(new Color(0.35f, 0.70f, 0.25f));
         materials[Dirt]   = MakeMaterial(new Color(0.50f, 0.35f, 0.20f));
         materials[Stone]  = MakeMaterial(new Color(0.55f, 0.55f, 0.58f));
@@ -176,6 +261,40 @@ public class BlockWorld : MonoBehaviour
         materials[MagicGrass]  = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(1.00f, 0.70f, 0.95f) : new Color(0.75f, 0.40f, 0.85f));
         materials[Crystal]     = MakeGlowingMaterial((x, y) => (x + y) % 4 == 0 ? new Color(0.85f, 1.00f, 1.00f) : new Color(0.30f, 0.85f, 0.95f));
         materials[Cloud]       = MakePixelMaterial((x, y) => Speckle(x, y, 9) ? new Color(0.90f, 0.92f, 0.98f) : Color.white);
+        materials[Chest]       = MakePixelMaterial(ChestPixel);
+        materials[MushroomStem] = MakePixelMaterial((x, y) => x % 3 == 0 ? new Color(0.88f, 0.84f, 0.76f) : new Color(0.96f, 0.93f, 0.86f));
+        materials[MushroomCap]  = MakePixelMaterial((x, y) =>
+            (x == 1 || x == 2) && (y == 1 || y == 2) || (x == 5 || x == 6) && (y == 4 || y == 5) || x == 3 && y == 6
+                ? Color.white : new Color(0.88f, 0.15f, 0.20f));   // red with white spots
+
+        materials[FirePortal]  = MakeSwirlMaterial(new Color(0.70f, 0.10f, 0.02f), new Color(1.00f, 0.75f, 0.15f));
+        materials[EmberRock]   = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(0.30f, 0.08f, 0.06f) : new Color(0.48f, 0.14f, 0.10f));
+        materials[Ash]         = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.35f, 0.33f, 0.33f) : new Color(0.50f, 0.48f, 0.47f));
+        materials[Lava]        = MakeSwirlMaterial(new Color(0.95f, 0.30f, 0.02f), new Color(1.00f, 0.85f, 0.20f));
+        materials[FireCrystal] = MakeGlowingMaterial((x, y) => (x + y) % 3 == 0 ? new Color(1.00f, 0.95f, 0.60f) : new Color(1.00f, 0.65f, 0.15f));
+        materials[FireVent]    = MakeGlowingMaterial((x, y) =>
+            Mathf.Abs(x - 3.5f) + Mathf.Abs(y - 3.5f) < 1.6f || x == y ? new Color(1.00f, 0.50f, 0.05f) : new Color(0.15f, 0.06f, 0.05f));
+
+        // The flames that fire is made of: red at the bottom, orange, and yellow at the tips
+        flameMaterials = new[]
+        {
+            MakeGlowingMaterial((x, y) => new Color(1.00f, 0.25f, 0.05f)),
+            MakeGlowingMaterial((x, y) => new Color(1.00f, 0.55f, 0.10f)),
+            MakeGlowingMaterial((x, y) => new Color(1.00f, 0.85f, 0.25f)),
+        };
+        materials[Fire] = flameMaterials[1];
+
+        Color[] rainbow =
+        {
+            new Color(1.00f, 0.20f, 0.20f), new Color(1.00f, 0.55f, 0.10f), new Color(1.00f, 0.92f, 0.20f),
+            new Color(0.30f, 0.85f, 0.30f), new Color(0.25f, 0.55f, 1.00f), new Color(0.65f, 0.30f, 0.95f)
+        };
+        for (int band = 0; band < rainbow.Length; band++)
+        {
+            Color colour = rainbow[band];
+            materials[RainbowRed + band] = MakeGlowingMaterial((x, y) =>
+                x == 0 || y == 0 || x == 7 || y == 7 ? colour * 0.85f : colour);   // a slightly darker edge, so you can see each block
+        }
 
         TntFlashMaterial  = MakeMaterial(Color.white);
         ExplosionMaterial = MakeSeeThroughMaterial(new Color(1f, 0.55f, 0.1f, 0.7f));
@@ -302,6 +421,15 @@ public class BlockWorld : MonoBehaviour
         return books[(x * 3 + (y > 4 ? 2 : 0)) % books.Length];
     }
 
+    // A wooden box with dark edges, a line where the lid opens, and a gold latch
+    static Color ChestPixel(int x, int y)
+    {
+        Color dark = new Color(0.32f, 0.20f, 0.10f);
+        if ((x == 3 || x == 4) && (y == 4 || y == 5)) return new Color(1.00f, 0.82f, 0.25f);   // the latch
+        if (x == 0 || y == 0 || x == 7 || y == 7 || y == 5) return dark;
+        return y % 2 == 0 ? new Color(0.62f, 0.42f, 0.20f) : new Color(0.68f, 0.47f, 0.24f);
+    }
+
     // Wooden boards in a dark frame. The top half has a little window.
     static Color DoorPixel(int x, int y, bool top)
     {
@@ -334,6 +462,8 @@ public class BlockWorld : MonoBehaviour
         });
     }
 
+    private Material[] flameMaterials;
+
     // A pixel texture that shines by itself
     static Material MakeGlowingMaterial(System.Func<int, int, Color> pixel)
     {
@@ -359,6 +489,8 @@ public class BlockWorld : MonoBehaviour
         Vector2 drift = new Vector2(Time.time * 0.25f, Time.time * 0.15f);
         materials[Portal].mainTextureOffset = drift;
         materials[MagicPortal].mainTextureOffset = -drift;
+        materials[FirePortal].mainTextureOffset = new Vector2(drift.y, -drift.x);
+        materials[Lava].mainTextureOffset = drift * 0.2f;   // slowly churning
     }
 
     // Nearly clear in the middle, with a pale frame and a glint across it
@@ -402,20 +534,26 @@ public class BlockWorld : MonoBehaviour
         {
             for (int z = 0; z < SizeZ; z++)
             {
-                // Big gentle hills, with small bumps on top of them
+                // Big gentle hills, with small bumps on top of them...
                 float hills = Mathf.PerlinNoise(offsetX + x * 0.03f, offsetZ + z * 0.03f);
                 float bumps = Mathf.PerlinNoise(offsetX + 500f + x * 0.12f, offsetZ + 500f + z * 0.12f);
 
-                int height = 4 + Mathf.RoundToInt(hills * 20f + bumps * 3f);
+                // ...and here and there, where this much wider noise is high, mountains
+                float mountains = Mathf.PerlinNoise(offsetX + 900f + x * 0.015f, offsetZ + 900f + z * 0.015f);
+                float peaks = Mathf.Max(0f, mountains - 0.55f) * 45f;
+
+                int height = 4 + Mathf.RoundToInt(hills * 20f + bumps * 3f + peaks);
                 height = Mathf.Min(height, SizeY - 8);   // leave room for a tree on top
                 groundHeight[x, z] = height;
 
-                // Land that only just pokes out of the sea becomes beach
+                // Land that only just pokes out of the sea becomes beach,
+                // and the tops of the mountains have snow on them
                 bool beach = height <= SeaLevel + 1;
+                bool snowy = height >= SeaLevel + 19;
 
                 for (int y = 0; y <= height; y++)
                 {
-                    if (y == height)          blocks[x, y, z] = beach ? Sand : Grass;
+                    if (y == height)          blocks[x, y, z] = beach ? Sand : snowy ? Snow : Grass;
                     else if (y >= height - 3) blocks[x, y, z] = beach ? Sand : Dirt;
                     else                      blocks[x, y, z] = Stone;
                 }
@@ -433,7 +571,7 @@ public class BlockWorld : MonoBehaviour
         {
             Vector3 pos = new Vector3(
                 RandomRange(0, SizeX),
-                RandomRange(3, SeaLevel + 3),
+                RandomRange(3, SeaLevel + 8),
                 RandomRange(0, SizeZ));
 
             float yaw = RandomRange(0, 360);
@@ -574,11 +712,14 @@ public class BlockWorld : MonoBehaviour
         if (random == null) random = new System.Random();   // a loaded world never made one
         GrowTree(x, y, z);
 
-        // GrowTree only fills in the grid, so now draw everything around it
+        // GrowTree only fills in the grid, so now redraw everything around it
         for (int cx = x - 3; cx <= x + 3; cx++)
-            for (int cy = y - 1; cy <= y + 8; cy++)
-                for (int cz = z - 3; cz <= z + 3; cz++)
-                    RefreshCube(cx, cy, cz);
+            for (int cz = z - 3; cz <= z + 3; cz++)
+            {
+                MarkChanged(cx, cz);
+                for (int cy = y - 1; cy <= y + 8; cy++)
+                    RefreshSpecial(cx, cy, cz);
+            }
         return true;
     }
 
@@ -598,24 +739,48 @@ public class BlockWorld : MonoBehaviour
         random = new System.Random(seed);
         Debug.Log("Magic land seed: " + seed);
 
-        // The island you arrive on, in the middle, then others scattered around it
-        MakeIsland(SizeX / 2, SizeZ / 2, 18, 7);
-        for (int i = 0; i < 10; i++)
-            MakeIsland(random.Next(6, SizeX - 6), random.Next(6, SizeZ - 6), random.Next(12, 24), random.Next(3, 8));
+        MakeEmptyWorld(NewSizeX, NewSizeY, NewSizeZ);
+        int area = SizeX * SizeZ;
 
-        for (int i = 0; i < 7; i++)
+        // The island you arrive on, in the middle, then others scattered
+        // around it - more of them in a bigger world
+        List<Island> islands = new List<Island>();
+        islands.Add(MakeIsland(SizeX / 2, SizeZ / 2, SizeY / 2, 8));
+        for (int i = 0; i < area / 400; i++)
+            islands.Add(MakeIsland(random.Next(6, SizeX - 6), random.Next(6, SizeZ - 6),
+                                   random.Next(SizeY / 4, SizeY * 2 / 3), random.Next(3, 9)));
+
+        // Fun things to find on the islands. The arrival island gets a
+        // mushroom to bounce on straight away; the others take their chances.
+        for (int i = 0; i < islands.Count; i++)
+        {
+            Island island = islands[i];
+            if (i == 0 || random.NextDouble() < 0.35) MakeGiantMushroom(island);
+            if (i != 0 && random.NextDouble() < 0.30) HideTreasure(island);
+            if (random.NextDouble() < 0.30) MakeWaterfall(island);
+            if (island.radius >= 6 && random.NextDouble() < 0.25)
+                BuildRainbow(new Vector3Int(island.x - 8, island.top + 1, island.z), Vector3.right);
+        }
+
+        for (int i = 0; i < area / 600; i++)
         {
             int x = random.Next(4, SizeX - 4), z = random.Next(4, SizeZ - 4);
-            if (Mathf.Abs(x - SizeX / 2) < 9 && Mathf.Abs(z - SizeZ / 2) < 9) continue;   // keep the sky over the arrival island clear
-            MakeCloud(x, random.Next(26, 29), z);
+            if (Mathf.Abs(x - SizeX / 2) < 10 && Mathf.Abs(z - SizeZ / 2) < 10) continue;   // keep the sky over the arrival island clear
+            MakeCloud(x, random.Next(SizeY - 10, SizeY - 6), z);
         }
 
         BuildAllCubes();
     }
 
+    // Where an island is, so we can put things on it afterwards
+    struct Island
+    {
+        public int x, z, top, radius;
+    }
+
     // An island is like an upside-down hill: a grassy top, and rock below
     // that narrows to a point
-    void MakeIsland(int cx, int cz, int top, int radius)
+    Island MakeIsland(int cx, int cz, int top, int radius)
     {
         float offset = random.Next(0, 10000);
 
@@ -653,6 +818,97 @@ public class BlockWorld : MonoBehaviour
             int ground = GetSurfaceHeight(tx, tz);
             if (ground >= 0 && blocks[tx, ground, tz] == MagicGrass && ground + 7 < SizeY)
                 MakeCrystalTree(tx, ground + 1, tz);
+        }
+
+        return new Island { x = cx, z = cz, top = top, radius = radius };
+    }
+
+    // A spot on top of an island's grass, with room above it
+    bool GrassSpotOn(Island island, out Vector3Int spot)
+    {
+        for (int tries = 0; tries < 25; tries++)
+        {
+            int x = island.x + random.Next(-island.radius + 1, island.radius);
+            int z = island.z + random.Next(-island.radius + 1, island.radius);
+            int y = GetSurfaceHeight(x, z);
+
+            if (y >= 0 && y + 8 < SizeY && blocks[x, y, z] == MagicGrass && blocks[x, y + 1, z] == Air)
+            {
+                spot = new Vector3Int(x, y, z);
+                return true;
+            }
+        }
+
+        spot = Vector3Int.zero;
+        return false;
+    }
+
+    // A tall pale stalk with a big spotty red cap that you can bounce on
+    void MakeGiantMushroom(Island island)
+    {
+        Vector3Int ground;
+        if (!GrassSpotOn(island, out ground)) return;
+
+        int stem = random.Next(3, 6);
+        for (int i = 1; i <= stem; i++)
+            SetIfEmpty(ground.x, ground.y + i, ground.z, MushroomStem);
+
+        // A wide round cap, and a smaller dome on top of it
+        int capY = ground.y + stem + 1;
+        for (int dx = -2; dx <= 2; dx++)
+            for (int dz = -2; dz <= 2; dz++)
+            {
+                if (Mathf.Abs(dx) == 2 && Mathf.Abs(dz) == 2) continue;   // round off the corners
+                SetIfEmpty(ground.x + dx, capY, ground.z + dz, MushroomCap);
+                if (Mathf.Abs(dx) <= 1 && Mathf.Abs(dz) <= 1)
+                    SetIfEmpty(ground.x + dx, capY + 1, ground.z + dz, MushroomCap);
+            }
+    }
+
+    // A chest full of treasure, sitting out on the grass
+    void HideTreasure(Island island)
+    {
+        Vector3Int ground;
+        if (!GrassSpotOn(island, out ground)) return;
+
+        Vector3Int cell = ground + Vector3Int.up;
+        blocks[cell.x, cell.y, cell.z] = Chest;
+
+        byte[] loot =
+        {
+            Diamond, Diamond, Gold, Gold, Crystal, Rainbow, Lamp, BouncePad, MegaTnt, Portal,
+            RainbowRed, RainbowYellow, RainbowBlue, RainbowPurple, MushroomCap, Obsidian
+        };
+
+        ChestContents inside = ChestAt(cell);
+        int things = random.Next(3, 7);
+        for (int i = 0; i < things; i++)
+        {
+            int space = random.Next(0, ChestContents.Spaces);
+            inside.items[space] = loot[random.Next(0, loot.Length)];
+            inside.counts[space] = (byte)random.Next(1, 16);
+        }
+    }
+
+    // Water pouring off the edge of an island, down into the sky below.
+    // You can swim up and down it!
+    void MakeWaterfall(Island island)
+    {
+        // Walk out from the middle until we step off the edge of the island
+        float angle = (float)random.NextDouble() * Mathf.PI * 2f;
+        for (int step = 1; step <= island.radius + 3; step++)
+        {
+            int x = island.x + Mathf.RoundToInt(Mathf.Cos(angle) * step);
+            int z = island.z + Mathf.RoundToInt(Mathf.Sin(angle) * step);
+            if (!InBounds(x, island.top, z)) return;
+            if (blocks[x, island.top, z] != Air) continue;   // still on the island
+
+            for (int y = island.top; y >= Mathf.Max(1, island.top - 18); y--)
+            {
+                if (blocks[x, y, z] != Air) break;   // landed on something
+                blocks[x, y, z] = Water;
+            }
+            return;
         }
     }
 
@@ -693,7 +949,42 @@ public class BlockWorld : MonoBehaviour
 
     // Sets a magic portal into the ground a couple of steps from "near",
     // so there's always a way home from the Magic Land
-    public void PlaceReturnPortal(Vector3 near)
+    // Builds a big glowing rainbow arch out of blocks, starting at "foot" and
+    // arching over in the direction you're facing. Red is on the outside,
+    // purple on the inside, and it's three blocks wide so you can walk over
+    // it. It only fills empty space, so it never knocks down anything you built.
+    public void BuildRainbow(Vector3Int foot, Vector3 facing)
+    {
+        const int radius = 8;
+        const int bands = 6;
+        const int width = 3;
+
+        // Arch along whichever way (X or Z) you're mostly facing
+        bool alongX = Mathf.Abs(facing.x) > Mathf.Abs(facing.z);
+        Vector3Int ahead = alongX ? new Vector3Int(facing.x > 0f ? 1 : -1, 0, 0) : new Vector3Int(0, 0, facing.z > 0f ? 1 : -1);
+        Vector3Int across = alongX ? new Vector3Int(0, 0, 1) : new Vector3Int(1, 0, 0);
+
+        for (int step = 0; step <= radius * 2; step++)
+        {
+            for (int up = 0; up <= radius; up++)
+            {
+                // How far this spot is from the middle of the arch, at ground level
+                float distance = Mathf.Sqrt((step - radius) * (step - radius) + up * up);
+                int band = radius - Mathf.RoundToInt(distance);   // 0 is the outside edge
+                if (band < 0 || band >= bands) continue;
+
+                for (int side = -(width / 2); side <= width / 2; side++)
+                {
+                    Vector3Int cell = foot + ahead * step + Vector3Int.up * up + across * side;
+                    if (GetBlock(cell.x, cell.y, cell.z) == Air && InBounds(cell.x, cell.y, cell.z))
+                        SetBlock(cell.x, cell.y, cell.z, (byte)(RainbowRed + band));
+                }
+            }
+        }
+    }
+
+    // (It sets a fire portal into the ash in the Nether, the same way.)
+    public void PlaceReturnPortal(Vector3 near, byte portal, byte ground)
     {
         int nx = Mathf.RoundToInt(near.x), nz = Mathf.RoundToInt(near.z);
         int[,] tries = { { 2, 0 }, { 0, 2 }, { -2, 0 }, { 0, -2 }, { 1, 0 }, { 0, 1 }, { 2, 2 }, { -2, -2 } };
@@ -702,15 +993,118 @@ public class BlockWorld : MonoBehaviour
         {
             int x = nx + tries[i, 0], z = nz + tries[i, 1];
             int y = GetSurfaceHeight(x, z);
-            if (y >= 0 && GetBlock(x, y, z) == MagicGrass)
+            if (y >= 0 && GetBlock(x, y, z) == ground)
             {
-                SetBlock(x, y, z, MagicPortal);
+                SetBlock(x, y, z, portal);
                 return;
             }
         }
 
         // Nowhere better? Then right where you'd stand.
-        SetBlock(nx, Mathf.RoundToInt(near.y - 0.6f), nz, MagicPortal);
+        SetBlock(nx, Mathf.RoundToInt(near.y - 0.6f), nz, portal);
+    }
+
+    // --- The Nether ---
+
+    // Rocky red hills dusted with ash, around a glowing sea of lava, with
+    // tall obsidian spires topped with fire crystals, and fire vents that
+    // shoot out flames (NetherFire.cs makes the flames)
+    public void GenerateNether()
+    {
+        int seed = System.Environment.TickCount;
+        random = new System.Random(seed);
+        Debug.Log("Nether seed: " + seed);
+
+        MakeEmptyWorld(NewSizeX, NewSizeY, NewSizeZ);
+        const int lavaLevel = 9;
+        float offsetX = random.Next(0, 10000), offsetZ = random.Next(0, 10000);
+
+        for (int x = 0; x < SizeX; x++)
+        {
+            for (int z = 0; z < SizeZ; z++)
+            {
+                // Lumpy hills, with jagged ridges here and there
+                float hills = Mathf.PerlinNoise(offsetX + x * 0.04f, offsetZ + z * 0.04f);
+                float bumps = Mathf.PerlinNoise(offsetX + 300f + x * 0.15f, offsetZ + 300f + z * 0.15f);
+                float ridges = Mathf.PerlinNoise(offsetX + 700f + x * 0.02f, offsetZ + 700f + z * 0.02f);
+
+                int height = 3 + Mathf.RoundToInt(hills * 16f + bumps * 4f + Mathf.Max(0f, ridges - 0.6f) * 50f);
+                height = Mathf.Min(height, SizeY - 10);
+
+                for (int y = 0; y <= height; y++)
+                {
+                    byte type = EmberRock;
+                    if (y == height && height > lavaLevel) type = Ash;
+                    else if (y < height - 2)
+                    {
+                        // Treasure in the rock: gold, and the odd fire crystal
+                        double treasure = random.NextDouble();
+                        if (treasure < 0.015) type = Gold;
+                        else if (treasure < 0.025) type = FireCrystal;
+                    }
+                    blocks[x, y, z] = type;
+                }
+
+                // Low ground becomes a lava lake
+                for (int y = height + 1; y <= lavaLevel; y++)
+                    blocks[x, y, z] = Lava;
+            }
+        }
+
+        // Tall obsidian spires, each topped with glowing fire crystals
+        int area = SizeX * SizeZ;
+        for (int i = 0; i < area / 600; i++)
+        {
+            int x = random.Next(3, SizeX - 3), z = random.Next(3, SizeZ - 3);
+            if (Mathf.Abs(x - SizeX / 2) < 6 && Mathf.Abs(z - SizeZ / 2) < 6) continue;   // keep the arrival spot clear
+            int ground = GetSurfaceHeight(x, z);
+            int tall = random.Next(6, 16);
+            int top = Mathf.Min(ground + tall, SizeY - 3);
+
+            for (int y = ground + 1; y <= top; y++)
+            {
+                blocks[x, y, z] = Obsidian;
+                if (y < ground + tall / 2) SetIfEmpty(x + 1, y, z, Obsidian);   // thicker at the bottom
+            }
+            SetIfEmpty(x, top + 1, z, FireCrystal);
+            SetIfEmpty(x + 1, top, z, FireCrystal);
+            SetIfEmpty(x - 1, top, z, FireCrystal);
+            SetIfEmpty(x, top, z + 1, FireCrystal);
+            SetIfEmpty(x, top, z - 1, FireCrystal);
+        }
+
+        // Fires burning here and there on the ash
+        for (int i = 0; i < area / 150; i++)
+        {
+            int x = random.Next(2, SizeX - 2), z = random.Next(2, SizeZ - 2);
+            int y = GetSurfaceHeight(x, z);
+            if (y >= 0 && y + 1 < SizeY && blocks[x, y, z] == Ash && (Mathf.Abs(x - SizeX / 2) > 5 || Mathf.Abs(z - SizeZ / 2) > 5))
+                blocks[x, y + 1, z] = Fire;
+        }
+
+        // Fire vents, set into the ash
+        for (int i = 0; i < area / 250; i++)
+        {
+            int x = random.Next(2, SizeX - 2), z = random.Next(2, SizeZ - 2);
+            int y = GetSurfaceHeight(x, z);
+            if (y >= 0 && blocks[x, y, z] == Ash && (Mathf.Abs(x - SizeX / 2) > 3 || Mathf.Abs(z - SizeZ / 2) > 3))
+                blocks[x, y, z] = FireVent;
+        }
+
+        // Make sure there's dry ground to arrive on, in the middle
+        int middleX = SizeX / 2, middleZ = SizeZ / 2;
+        int floor = Mathf.Max(GetSurfaceHeight(middleX, middleZ), lavaLevel + 1);
+        for (int x = middleX - 4; x <= middleX + 4; x++)
+            for (int z = middleZ - 4; z <= middleZ + 4; z++)
+            {
+                for (int y = 0; y <= floor; y++)
+                    if (blocks[x, y, z] == Lava || blocks[x, y, z] == Air || y == floor)
+                        blocks[x, y, z] = y == floor ? Ash : EmberRock;
+                for (int y = floor + 1; y < SizeY; y++)
+                    if (blocks[x, y, z] != Obsidian && blocks[x, y, z] != FireCrystal) blocks[x, y, z] = Air;
+            }
+
+        BuildAllCubes();
     }
 
     // --- Saving and loading ---
@@ -738,13 +1132,27 @@ public class BlockWorld : MonoBehaviour
             writer.Write(tree.y);
             writer.Write(tree.z);
         }
+
+        // What's in every chest
+        writer.Write(chests.Count);
+        foreach (KeyValuePair<Vector3Int, ChestContents> chest in chests)
+        {
+            writer.Write(chest.Key.x);
+            writer.Write(chest.Key.y);
+            writer.Write(chest.Key.z);
+            writer.Write(chest.Value.items);
+            writer.Write(chest.Value.counts);
+        }
     }
 
     public bool ReadFrom(BinaryReader reader)
     {
-        // A save from a different-sized world won't fit
-        if (reader.ReadInt32() != SizeX || reader.ReadInt32() != SizeY || reader.ReadInt32() != SizeZ)
-            return false;
+        // Worlds are the size they were made at - small ones from before
+        // worlds got bigger, or big new ones
+        int sizeX = reader.ReadInt32(), sizeY = reader.ReadInt32(), sizeZ = reader.ReadInt32();
+        if (sizeX < 16 || sizeY < 16 || sizeZ < 16 || sizeX > 512 || sizeY > 256 || sizeZ > 512)
+            return false;   // nonsense - the file must be damaged
+        MakeEmptyWorld(sizeX, sizeY, sizeZ);
 
         byte[] all = reader.ReadBytes(SizeX * SizeY * SizeZ);
         if (all.Length != SizeX * SizeY * SizeZ) return false;   // file cut short
@@ -759,6 +1167,19 @@ public class BlockWorld : MonoBehaviour
         int treeCount = reader.ReadInt32();
         for (int t = 0; t < treeCount; t++)
             Trees.Add(new Vector3Int(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32()));
+
+        // Saves from before chests existed stop here
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            int chestCount = reader.ReadInt32();
+            for (int c = 0; c < chestCount; c++)
+            {
+                Vector3Int cell = new Vector3Int(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32());
+                ChestContents inside = ChestAt(cell);
+                reader.Read(inside.items, 0, ChestContents.Spaces);
+                reader.Read(inside.counts, 0, ChestContents.Spaces);
+            }
+        }
 
         BuildAllCubes();
         return true;
@@ -831,7 +1252,8 @@ public class BlockWorld : MonoBehaviour
                     int z = middleZ + dz;
                     int y = GetSurfaceHeight(x, z);
 
-                    if (y >= 0 && (GetBlock(x, y, z) == Grass || GetBlock(x, y, z) == MagicGrass))
+                    byte top = GetBlock(x, y, z);
+                    if (y >= 0 && (top == Grass || top == MagicGrass || top == Ash))
                         return new Vector3(x, y + 0.6f, z);   // +0.5 is the top face of the block
                 }
             }
@@ -846,17 +1268,52 @@ public class BlockWorld : MonoBehaviour
     {
         if (!InBounds(x, y, z)) return;
 
+        // A chest that's broken or blown up loses everything inside it
+        if (blocks[x, y, z] == Chest && type != Chest)
+            chests.Remove(new Vector3Int(x, y, z));
+
         blocks[x, y, z] = type;
 
-        // This block and its six neighbours may have just become visible
-        // or hidden, so every one of them needs rechecking.
-        RefreshCube(x, y, z);
-        RefreshCube(x + 1, y, z);
-        RefreshCube(x - 1, y, z);
-        RefreshCube(x, y + 1, z);
-        RefreshCube(x, y - 1, z);
-        RefreshCube(x, y, z + 1);
-        RefreshCube(x, y, z - 1);
+        // Its chunk needs redrawing - and if it's on the edge of the chunk,
+        // so does the one next door, whose faces it might hide or uncover
+        MarkChanged(x, z);
+        MarkChanged(x + 1, z);
+        MarkChanged(x - 1, z);
+        MarkChanged(x, z + 1);
+        MarkChanged(x, z - 1);
+
+        // This block and its six neighbours may be stairs, doors or lamps
+        // that just appeared, went away, or were uncovered
+        RefreshSpecial(x, y, z);
+        RefreshSpecial(x + 1, y, z);
+        RefreshSpecial(x - 1, y, z);
+        RefreshSpecial(x, y + 1, z);
+        RefreshSpecial(x, y - 1, z);
+        RefreshSpecial(x, y, z + 1);
+        RefreshSpecial(x, y, z - 1);
+    }
+
+    void MarkChanged(int x, int z)
+    {
+        if (!InBounds(x, 0, z)) return;
+        chunkChanged[x / ChunkSize, z / ChunkSize] = true;
+        anyChunkChanged = true;
+    }
+
+    // All the changes made this frame get drawn together, so a TNT blast
+    // that changes hundreds of blocks only redraws each chunk once
+    void LateUpdate()
+    {
+        if (!anyChunkChanged) return;
+        anyChunkChanged = false;
+
+        for (int cx = 0; cx < chunks.GetLength(0); cx++)
+            for (int cz = 0; cz < chunks.GetLength(1); cz++)
+                if (chunkChanged[cx, cz])
+                {
+                    chunkChanged[cx, cz] = false;
+                    BuildChunk(cx, cz);
+                }
     }
 
     // --- Deciding what to draw ---
@@ -917,34 +1374,27 @@ public class BlockWorld : MonoBehaviour
     // so a block next to any of them is on show
     static bool SeeThrough(byte type)
     {
-        return type == Air || type == Water || type == Glass || Shaped(type);
+        return type == Air || type == Water || type == Glass || type == Fire || Shaped(type);
     }
 
     // Water is drawn where it touches air, glass (so you can build a fish
     // tank), or the gaps around stairs and doors
     static bool ShowsWater(byte type)
     {
-        return type == Air || type == Glass || Shaped(type);
+        return type == Air || type == Glass || type == Fire || Shaped(type);
     }
 
-    // A block needs a cube only if at least one of its six sides is exposed
+    // Stairs, doors and lamps are drawn one by one, not as part of a chunk
+    static bool Special(byte type)
+    {
+        return Shaped(type) || type == Lamp || type == Fire;
+    }
+
+    // A stairs, door or lamp only needs drawing if at least one side is exposed
     bool IsVisible(int x, int y, int z)
     {
-        byte type = blocks[x, y, z];
-        if (type == Air) return false;
-
-        // Water is only drawn where you could see it - the surface of the sea,
-        // the sides of a pool or tower you built yourself, or behind glass
-        if (type == Water)
-            return ShowsWater(GetBlock(x + 1, y, z))
-                || ShowsWater(GetBlock(x - 1, y, z))
-                || ShowsWater(GetBlock(x, y + 1, z))
-                || ShowsWater(GetBlock(x, y - 1, z))
-                || ShowsWater(GetBlock(x, y, z + 1))
-                || ShowsWater(GetBlock(x, y, z - 1));
-
-        // The bottom of the world counts as solid, so we don't waste cubes
-        // drawing the underside of the ground where nobody can ever see it.
+        // The bottom of the world counts as solid, so we never draw
+        // the underside of the ground where nobody can ever see it.
         bool openBelow = (y > 0) && SeeThrough(blocks[x, y - 1, z]);
 
         return openBelow
@@ -955,61 +1405,55 @@ public class BlockWorld : MonoBehaviour
             || SeeThrough(GetBlock(x, y, z - 1));
     }
 
+    // Draws the whole world from scratch, once it's been made or loaded
     void BuildAllCubes()
     {
+        for (int cx = 0; cx < chunks.GetLength(0); cx++)
+            for (int cz = 0; cz < chunks.GetLength(1); cz++)
+                BuildChunk(cx, cz);
+
         for (int x = 0; x < SizeX; x++)
             for (int y = 0; y < SizeY; y++)
                 for (int z = 0; z < SizeZ; z++)
-                    RefreshCube(x, y, z);
+                    if (Special(blocks[x, y, z]))
+                        RefreshSpecial(x, y, z);
     }
 
-    void RefreshCube(int x, int y, int z)
+    // --- Stairs, doors and lamps ---
+
+    void RefreshSpecial(int x, int y, int z)
     {
         if (!InBounds(x, y, z)) return;
 
-        bool wanted = IsVisible(x, y, z);
-        GameObject cube = cubes[x, y, z];
+        Vector3Int cell = new Vector3Int(x, y, z);
+        byte type = blocks[x, y, z];
+        bool wanted = Special(type) && IsVisible(x, y, z);
 
-        if (wanted && cube == null)
+        GameObject existing;
+        bool have = specials.TryGetValue(cell, out existing);
+
+        // Gone, hidden, or turned into something else (like a door opening)?
+        if (have && (!wanted || specialBuiltAs[cell] != type))
         {
-            cubes[x, y, z] = CreateCube(x, y, z);
+            Destroy(existing);
+            specials.Remove(cell);
+            have = false;
         }
-        else if (!wanted && cube != null)
+
+        if (wanted && !have)
         {
-            Destroy(cube);
-            cubes[x, y, z] = null;
-        }
-        else if (wanted && cubeBuiltAs[x, y, z] != blocks[x, y, z])
-        {
-            // Still visible, but it's a different type now. Two plain solid
-            // cubes only need a change of look; anything else - water, lamps,
-            // stairs, doors - is built differently, so it gets a new cube.
-            if (PlainCube(cubeBuiltAs[x, y, z]) && PlainCube(blocks[x, y, z]))
-            {
-                cube.GetComponent<Renderer>().sharedMaterial = materials[blocks[x, y, z]];
-                cubeBuiltAs[x, y, z] = blocks[x, y, z];
-            }
-            else
-            {
-                Destroy(cube);
-                cubes[x, y, z] = CreateCube(x, y, z);
-            }
+            specials[cell] = CreateSpecial(x, y, z);
+            specialBuiltAs[cell] = type;
         }
     }
 
-    static bool PlainCube(byte type)
-    {
-        return type != Water && type != Lamp && !Shaped(type);
-    }
-
-    GameObject CreateCube(int x, int y, int z)
+    GameObject CreateSpecial(int x, int y, int z)
     {
         byte type = blocks[x, y, z];
 
         GameObject cube = new GameObject("Block " + x + "," + y + "," + z);
         cube.transform.SetParent(transform, false);
         cube.transform.localPosition = new Vector3(x, y, z);
-        cubeBuiltAs[x, y, z] = type;
 
         if (Shaped(type))
         {
@@ -1031,26 +1475,249 @@ public class BlockWorld : MonoBehaviour
             return cube;
         }
 
-        cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
-        MeshRenderer look = cube.AddComponent<MeshRenderer>();
-        look.sharedMaterial = materials[type];
-
-        if (type == Water || type == Glass)
-            look.shadowCastingMode = ShadowCastingMode.Off;   // light shines through these
-
-        if (type != Water)
-            cube.AddComponent<BoxCollider>();                 // everything but water is solid
-
-        if (type == Lamp)
+        // Fire: a few glowing flames of different sizes, which flicker. Nothing
+        // solid - you can walk right into it (and you'll wish you hadn't!)
+        if (type == Fire)
         {
-            Light glow = cube.AddComponent<Light>();
-            glow.type = LightType.Point;
-            glow.color = new Color(1f, 0.85f, 0.55f);
-            glow.range = 8f;
-            glow.intensity = 1.5f;
-            glow.shadows = LightShadows.None;
+            // The same spot always gets the same flames, so fire doesn't
+            // change shape when it's redrawn
+            System.Random shape = new System.Random(x * 73856093 ^ y * 19349663 ^ z * 83492791);
+            for (int i = 0; i < 5; i++)
+            {
+                GameObject flame = new GameObject("Flame");
+                flame.transform.SetParent(cube.transform, false);
+                float tall = 0.3f + (float)shape.NextDouble() * 0.5f;
+                flame.transform.localPosition = new Vector3((float)shape.NextDouble() * 0.6f - 0.3f, -0.5f + tall / 2f,
+                                                            (float)shape.NextDouble() * 0.6f - 0.3f);
+                flame.transform.localScale = new Vector3(0.18f + (float)shape.NextDouble() * 0.15f, tall, 0.18f + (float)shape.NextDouble() * 0.15f);
+                flame.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+                MeshRenderer look = flame.AddComponent<MeshRenderer>();
+                look.sharedMaterial = flameMaterials[i % flameMaterials.Length];
+                look.shadowCastingMode = ShadowCastingMode.Off;
+            }
+            cube.AddComponent<Flicker>();
+            return cube;
         }
 
+        // A lamp: a glowing cube with a real light inside
+        cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+        cube.AddComponent<MeshRenderer>().sharedMaterial = materials[type];
+        cube.AddComponent<BoxCollider>();
+
+        Light glow = cube.AddComponent<Light>();
+        glow.type = LightType.Point;
+        glow.color = new Color(1f, 0.85f, 0.55f);
+        glow.range = 8f;
+        glow.intensity = 1.5f;
+        glow.shadows = LightShadows.None;
+
         return cube;
+    }
+
+    // --- Chunks ---
+
+    // The things a chunk is drawn with. Water and glass go in their own
+    // shape, because light shines through them, so they cast no shadow.
+    class Chunk
+    {
+        public Mesh solid, seeThrough, bumps;
+        public MeshRenderer solidLook, seeThroughLook;
+        public MeshCollider collider;
+    }
+
+    // Is this face of a block on show, given what's next to it?
+    static bool FaceShows(byte type, byte neighbour)
+    {
+        if (type == Water) return ShowsWater(neighbour);
+        if (type == Glass) return neighbour == Air || neighbour == Water || Shaped(neighbour);   // no faces between panes
+        return SeeThrough(neighbour);
+    }
+
+    // The six directions a face can point, and the corners of each face
+    static readonly Vector3Int[] FaceDirections =
+    {
+        Vector3Int.right, Vector3Int.left, Vector3Int.up, Vector3Int.down,
+        new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
+    };
+    static readonly Vector3[,] FaceCorners = MakeFaceCorners();
+
+    static Vector3[,] MakeFaceCorners()
+    {
+        Vector3[,] corners = new Vector3[6, 4];
+        for (int d = 0; d < 6; d++)
+        {
+            // Two directions along the face: "up" (so textures stand the right
+            // way up on the sides) and "across". Going round the corners in
+            // this order makes the face visible from the outside.
+            Vector3 normal = FaceDirections[d];
+            Vector3 up = d == 2 || d == 3 ? Vector3.forward : Vector3.up;
+            Vector3 across = Vector3.Cross(normal, up);
+
+            Vector3 middle = normal * 0.5f;
+            corners[d, 0] = middle + (-across - up) * 0.5f;
+            corners[d, 1] = middle + (-across + up) * 0.5f;
+            corners[d, 2] = middle + (across + up) * 0.5f;
+            corners[d, 3] = middle + (across - up) * 0.5f;
+        }
+        return corners;
+    }
+
+    static readonly Vector2[] CornerUVs = { new Vector2(0, 0), new Vector2(0, 1), new Vector2(1, 1), new Vector2(1, 0) };
+
+    // Collects faces, sorted by block type, to turn into one shape
+    class ShapeBuilder
+    {
+        public readonly List<Vector3> corners = new List<Vector3>();
+        public readonly List<Vector3> normals = new List<Vector3>();
+        public readonly List<Vector2> uvs = new List<Vector2>();
+        public readonly SortedDictionary<byte, List<int>> trianglesByType = new SortedDictionary<byte, List<int>>();
+
+        public void Clear()
+        {
+            corners.Clear();
+            normals.Clear();
+            uvs.Clear();
+            foreach (List<int> list in trianglesByType.Values) list.Clear();
+        }
+
+        public void AddFace(Vector3 centre, int direction, byte type)
+        {
+            int first = corners.Count;
+            for (int c = 0; c < 4; c++)
+            {
+                corners.Add(centre + FaceCorners[direction, c]);
+                normals.Add(FaceDirections[direction]);
+                uvs.Add(CornerUVs[c]);
+            }
+
+            List<int> triangles;
+            if (!trianglesByType.TryGetValue(type, out triangles))
+            {
+                triangles = new List<int>();
+                trianglesByType[type] = triangles;
+            }
+            triangles.Add(first); triangles.Add(first + 1); triangles.Add(first + 2);
+            triangles.Add(first); triangles.Add(first + 2); triangles.Add(first + 3);
+        }
+
+        // Fills in the mesh, and returns the material for each part of it
+        public Material[] CopyTo(Mesh mesh, Material[] materials)
+        {
+            mesh.Clear();
+            mesh.SetVertices(corners);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
+
+            List<Material> used = new List<Material>();
+            List<List<int>> parts = new List<List<int>>();
+            foreach (KeyValuePair<byte, List<int>> entry in trianglesByType)
+            {
+                if (entry.Value.Count == 0) continue;
+                used.Add(materials[entry.Key]);
+                parts.Add(entry.Value);
+            }
+
+            mesh.subMeshCount = parts.Count;
+            for (int i = 0; i < parts.Count; i++)
+                mesh.SetTriangles(parts[i], i, false);
+            mesh.RecalculateBounds();
+            return used.ToArray();
+        }
+    }
+
+    // Shared by every chunk, so building one doesn't make lots of garbage
+    static readonly ShapeBuilder solidFaces = new ShapeBuilder();
+    static readonly ShapeBuilder seeThroughFaces = new ShapeBuilder();
+    static readonly ShapeBuilder bumpFaces = new ShapeBuilder();   // everything solid, for bumping into
+
+    void BuildChunk(int cx, int cz)
+    {
+        Chunk chunk = chunks[cx, cz];
+        if (chunk == null)
+        {
+            chunk = MakeChunk(cx, cz);
+            chunks[cx, cz] = chunk;
+        }
+
+        solidFaces.Clear();
+        seeThroughFaces.Clear();
+        bumpFaces.Clear();
+
+        int endX = Mathf.Min((cx + 1) * ChunkSize, SizeX);
+        int endZ = Mathf.Min((cz + 1) * ChunkSize, SizeZ);
+
+        for (int x = cx * ChunkSize; x < endX; x++)
+        for (int y = 0; y < SizeY; y++)
+        for (int z = cz * ChunkSize; z < endZ; z++)
+        {
+            byte type = blocks[x, y, z];
+            if (type == Air || Special(type)) continue;
+
+            bool clear = type == Water || type == Glass;
+            Vector3 centre = new Vector3(x, y, z);
+
+            for (int d = 0; d < 6; d++)
+            {
+                if (d == 3 && y == 0) continue;   // the underside of the world
+
+                Vector3Int n = FaceDirections[d];
+                if (!FaceShows(type, GetBlock(x + n.x, y + n.y, z + n.z))) continue;
+
+                (clear ? seeThroughFaces : solidFaces).AddFace(centre, d, type);
+                if (type != Water && type != Lava) bumpFaces.AddFace(centre, d, Stone);   // you sink into water and lava
+            }
+        }
+
+        chunk.solidLook.sharedMaterials = solidFaces.CopyTo(chunk.solid, materials);
+        chunk.seeThroughLook.sharedMaterials = seeThroughFaces.CopyTo(chunk.seeThrough, materials);
+        bumpFaces.CopyTo(chunk.bumps, materials);
+
+        // The collider only notices a changed shape if it's handed the shape again
+        chunk.collider.sharedMesh = null;
+        if (bumpFaces.corners.Count > 0) chunk.collider.sharedMesh = chunk.bumps;
+    }
+
+    Chunk MakeChunk(int cx, int cz)
+    {
+        Chunk chunk = new Chunk();
+
+        GameObject obj = new GameObject("Chunk " + cx + "," + cz);
+        obj.transform.SetParent(transform, false);
+
+        chunk.solid = NewMesh();
+        chunk.seeThrough = NewMesh();
+        chunk.bumps = NewMesh();
+
+        obj.AddComponent<MeshFilter>().sharedMesh = chunk.solid;
+        chunk.solidLook = obj.AddComponent<MeshRenderer>();
+        chunk.collider = obj.AddComponent<MeshCollider>();
+
+        GameObject clear = new GameObject("Water and glass");
+        clear.transform.SetParent(obj.transform, false);
+        clear.AddComponent<MeshFilter>().sharedMesh = chunk.seeThrough;
+        chunk.seeThroughLook = clear.AddComponent<MeshRenderer>();
+        chunk.seeThroughLook.shadowCastingMode = ShadowCastingMode.Off;   // light shines through these
+
+        return chunk;
+    }
+
+    static Mesh NewMesh()
+    {
+        Mesh mesh = new Mesh();
+        mesh.indexFormat = IndexFormat.UInt32;   // a chunk can have more corners than the usual limit of 65,535
+        return mesh;
+    }
+
+    // The chunk shapes aren't cleaned up automatically like objects are
+    void OnDestroyChunks()
+    {
+        if (chunks == null) return;
+        foreach (Chunk chunk in chunks)
+        {
+            if (chunk == null) continue;
+            Destroy(chunk.solid);
+            Destroy(chunk.seeThrough);
+            Destroy(chunk.bumps);
+        }
     }
 }

@@ -9,7 +9,10 @@ using UnityEngine;
 // TNT and most swords won't hurt them - they just get a fright (or a flight).
 // Only a diamond sword can defeat them.
 // Like the animals they have no collider, so they never get in your way.
-public class Villager : MonoBehaviour, ILeashable
+//
+// Magic villagers, who live in the Magic Land, are in MagicVillagers.cs,
+// and fire villagers, who live in the Nether, are in FireVillagers.cs.
+public partial class Villager : MonoBehaviour, ILeashable
 {
     const int HowMany = 6;
     const float WalkSpeed = 1.6f;
@@ -85,30 +88,19 @@ public class Villager : MonoBehaviour, ILeashable
 
     // --- Making people ---
 
-    // A little village of people, close to where you start
-    public static void SpawnAll(BlockWorld world)
-    {
-        Vector3 middle = world.FindSpawnPoint();
-
-        for (int i = 0; i < HowMany; i++)
-        {
-            Vector3 spot;
-            if (FindSpotNear(world, middle, 8, out spot))
-                SpawnAt(world, spot);
-        }
-    }
-
     // One new person, standing exactly here. Wherever they first stand is home.
-    public static Villager SpawnAt(BlockWorld world, Vector3 spot)
+    public static Villager SpawnAt(BlockWorld world, Vector3 spot, bool magic = false, string name = null, bool fire = false)
     {
-        GameObject obj = new GameObject("Villager");
+        GameObject obj = new GameObject(magic ? "Magic Villager" : fire ? "Fire Villager" : "Villager");
         obj.transform.position = spot;
         obj.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
 
         Villager person = obj.AddComponent<Villager>();
         person.world = world;
         person.home = spot;
-        person.villagerName = Names[Random.Range(0, Names.Length)];
+        person.isMagic = magic;
+        person.isFire = fire;
+        person.villagerName = name ?? Names[Random.Range(0, Names.Length)];
         person.BuildBody();
         return person;
     }
@@ -122,8 +114,9 @@ public class Villager : MonoBehaviour, ILeashable
     }
 
     // A grassy spot with room to stand, within "range" blocks of "middle"
-    // if possible, otherwise anywhere at all
-    static bool FindSpotNear(BlockWorld world, Vector3 middle, int range, out Vector3 spot)
+    // if possible, otherwise anywhere at all. Magic villagers are happy on
+    // magic grass too.
+    static bool FindSpotNear(BlockWorld world, Vector3 middle, int range, out Vector3 spot, bool magicGrassToo = false)
     {
         for (int tries = 0; tries < 300; tries++)
         {
@@ -132,7 +125,9 @@ public class Villager : MonoBehaviour, ILeashable
             int z = Mathf.RoundToInt(middle.z) + Random.Range(-r, r + 1);
             int y = world.GetSurfaceHeight(x, z);
 
-            if (y >= 0 && world.GetBlock(x, y, z) == BlockWorld.Grass && world.GetBlock(x, y + 2, z) == BlockWorld.Air)
+            byte ground = world.GetBlock(x, y, z);
+            bool grassy = ground == BlockWorld.Grass || (magicGrassToo && ground == BlockWorld.MagicGrass);
+            if (y >= 0 && grassy && world.GetBlock(x, y + 2, z) == BlockWorld.Air)
             {
                 spot = new Vector3(x, y + 0.5f, z);
                 return true;
@@ -163,6 +158,17 @@ public class Villager : MonoBehaviour, ILeashable
     // head each hang from a pivot (shoulder, hip, neck) so they can swing.
     void BuildBody()
     {
+        if (isMagic)
+        {
+            BuildMagicBody();
+            return;
+        }
+        if (isFire)
+        {
+            BuildFireBody();
+            return;
+        }
+
         Material shirt = Paint(Pick(Shirts));
         Material trousers = Paint(Pick(Trousers));
         Material hair = Paint(Pick(Hair));
@@ -234,8 +240,13 @@ public class Villager : MonoBehaviour, ILeashable
 
         transform.rotation = Quaternion.RotateTowards(transform.rotation, facing, 360f * Time.deltaTime);
 
-        BeThrown();
-        StayOnGround();
+        // While flying (a magic trick), nothing pulls us down
+        if (!flying)
+        {
+            BeThrown();
+            StayOnGround();
+            HopThroughLinkedPortal();
+        }
         Animate();
     }
 
@@ -269,6 +280,7 @@ public class Villager : MonoBehaviour, ILeashable
     bool Passable(int x, int y, int z)
     {
         byte type = world.GetBlock(x, y, z);
+        if (isFire && type == BlockWorld.Fire) return true;   // fire villagers walk right through flames
         return type == BlockWorld.Air || (BlockWorld.IsDoor(type) && BlockWorld.DoorIsOpen(type));
     }
 
@@ -356,7 +368,7 @@ public class Villager : MonoBehaviour, ILeashable
         if (pos.y < -10f || world.GetBlock(x, feet, z) == BlockWorld.Water)
         {
             Vector3 spot;
-            if (FindSpotNear(world, home, 6, out spot))
+            if (isFire ? FindAshSpot(world, home, 6, out spot) : FindSpotNear(world, home, 6, out spot, isMagic))
             {
                 transform.position = spot;
                 verticalSpeed = 0f;
@@ -445,7 +457,7 @@ public class Villager : MonoBehaviour, ILeashable
     void StopEverything()
     {
         StopAllCoroutines();
-        walking = running = waving = armsUp = false;
+        walking = running = waving = armsUp = flying = false;
         headTurn = headNod = 0f;
 
         if (chatPartner != null)
@@ -520,6 +532,24 @@ public class Villager : MonoBehaviour, ILeashable
             yield break;
         }
 
+        // Magic villagers have tricks of their own to try first
+        if (isMagic || isFire)
+        {
+            IEnumerator trick = isMagic ? PickMagicTrick() : PickFireTrick();
+            if (trick != null)
+            {
+                yield return trick;
+                yield break;
+            }
+        }
+
+        // Now and then, off to visit the other world (if there's a magic portal nearby)
+        if (!isMagic && !isFire && Random.value < 0.03f)
+        {
+            yield return VisitOtherWorld(WalkToPortalRange);
+            yield break;
+        }
+
         float roll = Random.value;
 
         if (roll < 0.15f)
@@ -544,7 +574,7 @@ public class Villager : MonoBehaviour, ILeashable
 
         if (roll < 0.32f)
             yield return JumpForJoy();
-        else if (roll < 0.36f && !plantedTree && world.Trees.Count < MostTrees)
+        else if (roll < 0.36f && !plantedTree && !isMagic && !isFire && world.Trees.Count < MostTrees)
             yield return PlantTree();
         else if (roll < 0.55f)
             yield return LookAround();
@@ -640,7 +670,7 @@ public class Villager : MonoBehaviour, ILeashable
     {
         lastHello = Time.time;
         FaceTowards(player.position);
-        Say(Hellos[Random.Range(0, Hellos.Length)]);
+        Say(HelloLine());
 
         waving = true;
         for (float t = 0f; t < 2f; t += Time.deltaTime)
@@ -663,7 +693,8 @@ public class Villager : MonoBehaviour, ILeashable
         Transform them = friend.transform;
         yield return WalkTowards(() => them.position, WalkSpeed, 1.3f, 5f);
 
-        string[] lines = Chats[Random.Range(0, Chats.Length)];
+        string[][] topics = isFire || friend.isFire ? FireChats : isMagic || friend.isMagic ? MagicChats : Chats;
+        string[] lines = topics[Random.Range(0, topics.Length)];
         Say(lines[0]);
         yield return Nod(2.5f);
 
@@ -792,7 +823,8 @@ public class Villager : MonoBehaviour, ILeashable
         Camera cam = Camera.main;
         if (cam == null) return;
 
-        Vector3 top = transform.position + Vector3.up * (Height + 0.3f);
+        float tallest = isMagic ? HatTop : isFire ? FlameTop : Height;   // above the hat (or the flames) too
+        Vector3 top = transform.position + Vector3.up * (tallest + 0.3f);
         float distance = Vector3.Distance(cam.transform.position, top);
         bool talking = Time.time < sayUntil;
         if (distance > 16f || (!talking && distance > 7f)) return;

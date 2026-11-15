@@ -29,8 +29,16 @@ public partial class BlockInteractor
         new Recipe(BlockWorld.MegaTnt,   BlockWorld.Tnt, 4, BlockWorld.Obsidian, 1),
         new Recipe(ChickenEgg,           BlockWorld.Snow, 1, BlockWorld.Grass, 2),
         new Recipe(VillagerEgg,          ChickenEgg, 1, BlockWorld.Gold, 1, BlockWorld.Diamond, 1),
+        new Recipe(MagicVillagerEgg,     VillagerEgg, 1, BlockWorld.Crystal, 1, BlockWorld.MagicGrass, 1),
         new Recipe(BlockWorld.Portal,    BlockWorld.Obsidian, 4, BlockWorld.Diamond, 1),
         new Recipe(BlockWorld.MagicPortal, BlockWorld.Portal, 1, BlockWorld.Rainbow, 1, BlockWorld.Diamond, 1),
+        new Recipe(RainbowArch,          BlockWorld.Rainbow, 1, BlockWorld.Lamp, 1, BlockWorld.Water, 1),
+        new Recipe(BlockWorld.Chest,     BlockWorld.Planks, 8),
+        new Recipe(UnicornEgg,           ChickenEgg, 1, BlockWorld.Rainbow, 1, BlockWorld.Gold, 1),
+        new Recipe(Wings,                BlockWorld.Snow, 4, BlockWorld.Gold, 1, BlockWorld.Diamond, 1),
+        new Recipe(DragonEgg,            ChickenEgg, 1, BlockWorld.Obsidian, 2, BlockWorld.Gold, 1),
+        new Recipe(BlockWorld.FirePortal, BlockWorld.Obsidian, 4, BlockWorld.Lamp, 1, BlockWorld.Tnt, 1),
+        new Recipe(FireVillagerEgg,      VillagerEgg, 1, BlockWorld.FireCrystal, 1, BlockWorld.Lava, 1),
         new Recipe(Sapling,              BlockWorld.Wood, 1, BlockWorld.Leaves, 1),
         new Recipe(BlockWorld.Ice,       BlockWorld.Snow, 2, BlockWorld.Water, 2),
         new Recipe(BlockWorld.Rainbow,   BlockWorld.Brick, 1, BlockWorld.Gold, 1, BlockWorld.Grass, 1,
@@ -55,7 +63,8 @@ public partial class BlockInteractor
     private readonly HashSet<byte> crafted = new HashSet<byte>();   // everything you've ever made
     private string craftMessage = "";
     private float craftMessageTime = -100f;
-    private static Texture2D eggPicture, villagerEggPicture, saplingPicture, fireworkPicture, stairsPicture;
+    private static readonly Dictionary<byte, Texture2D> eggPictures = new Dictionary<byte, Texture2D>();
+    private static Texture2D saplingPicture, fireworkPicture, stairsPicture, rainbowPicture;
 
     // --- What you've made so far ---
 
@@ -189,9 +198,9 @@ public partial class BlockInteractor
         GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
         GUI.color = before;
 
-        // Everything is laid out on an 860 x 660 panel, which is shrunk to fit
+        // Everything is laid out on an 860 x 980 panel, which is shrunk to fit
         // small windows and placed in the middle of the screen
-        const float width = 860f, height = 660f;
+        const float width = 860f, height = 980f;
         float scale = Mathf.Min(1f, (Screen.width - 32f) / width, (Screen.height - 120f) / height);
         Matrix4x4 oldMatrix = GUI.matrix;
         GUI.matrix = Matrix4x4.TRS(
@@ -334,6 +343,7 @@ public partial class BlockInteractor
                     case 'k': colour = new Color(0.20f, 0.20f, 0.22f); break;   // nearly black
                     case 'x': colour = special; break;
                     case 'p': colour = new Color(0.75f, 0.58f, 0.34f); break;   // planks
+                    case 'o': colour = new Color(1.00f, 0.55f, 0.10f); break;   // orange
                     case 'y': colour = new Color(1.00f, 0.85f, 0.20f); break;   // yellow
                     default:  colour = Color.clear; break;                      // see-through
                 }
@@ -359,6 +369,35 @@ public partial class BlockInteractor
                 "..dddd..",
             });
         return saplingPicture;
+    }
+
+    // Six coloured bands in a half circle, red on the outside
+    static Texture2D RainbowPicture()
+    {
+        if (rainbowPicture != null) return rainbowPicture;
+
+        Color[] bands =
+        {
+            new Color(1.00f, 0.20f, 0.20f), new Color(1.00f, 0.55f, 0.10f), new Color(1.00f, 0.92f, 0.20f),
+            new Color(0.30f, 0.85f, 0.30f), new Color(0.25f, 0.55f, 1.00f), new Color(0.65f, 0.30f, 0.95f)
+        };
+
+        const int size = 16;
+        rainbowPicture = new Texture2D(size, size);
+        rainbowPicture.filterMode = FilterMode.Point;
+
+        for (int x = 0; x < size; x++)
+        {
+            for (int y = 0; y < size; y++)
+            {
+                float distance = Vector2.Distance(new Vector2(x, y), new Vector2(7.5f, 3f));
+                int band = Mathf.FloorToInt((7.5f - distance) / 1.0f);
+                bool onArch = y >= 3 && band >= 0 && band < bands.Length;
+                rainbowPicture.SetPixel(x, y, onArch ? bands[band] : Color.clear);
+            }
+        }
+        rainbowPicture.Apply();
+        return rainbowPicture;
     }
 
     static Texture2D StairsPicture()
@@ -396,14 +435,50 @@ public partial class BlockInteractor
     }
 
     // A speckled egg on a see-through background, for the inventory: cream
-    // for a chicken egg, or sky blue with gold spots for a villager egg
-    static Texture2D EggPicture(bool villager = false)
+    // for a chicken egg, sky blue with gold spots for a villager egg, and
+    // purple with glowing pink spots for a magic villager egg
+    static readonly Color[] RainbowSpots =
     {
-        Texture2D picture = villager ? villagerEggPicture : eggPicture;
-        if (picture != null) return picture;
+        new Color(1.00f, 0.25f, 0.25f), new Color(1.00f, 0.60f, 0.15f), new Color(1.00f, 0.90f, 0.20f),
+        new Color(0.35f, 0.85f, 0.35f), new Color(0.30f, 0.60f, 1.00f), new Color(0.70f, 0.35f, 1.00f)
+    };
 
-        Color shell = villager ? new Color(0.55f, 0.80f, 1.00f) : new Color(0.98f, 0.93f, 0.82f);
-        Color spots = villager ? new Color(1.00f, 0.80f, 0.20f) : new Color(0.80f, 0.68f, 0.50f);
+    static Texture2D EggPicture(byte egg)
+    {
+        Texture2D picture;
+        if (eggPictures.TryGetValue(egg, out picture) && picture != null) return picture;
+
+        Color shell, spots;
+        if (egg == VillagerEgg)
+        {
+            shell = new Color(0.55f, 0.80f, 1.00f);
+            spots = new Color(1.00f, 0.80f, 0.20f);
+        }
+        else if (egg == FireVillagerEgg)
+        {
+            shell = new Color(1.00f, 0.50f, 0.12f);   // bright orange, with yellow flame spots
+            spots = new Color(1.00f, 0.90f, 0.30f);
+        }
+        else if (egg == DragonEgg)
+        {
+            shell = new Color(0.20f, 0.12f, 0.25f);   // dark and scaly, with fiery spots
+            spots = new Color(1.00f, 0.45f, 0.10f);
+        }
+        else if (egg == UnicornEgg)
+        {
+            shell = new Color(0.98f, 0.97f, 1.00f);   // white - the spots are every colour of the rainbow
+            spots = Color.white;
+        }
+        else if (egg == MagicVillagerEgg)
+        {
+            shell = new Color(0.55f, 0.30f, 0.85f);
+            spots = new Color(1.00f, 0.60f, 0.95f);
+        }
+        else
+        {
+            shell = new Color(0.98f, 0.93f, 0.82f);
+            spots = new Color(0.80f, 0.68f, 0.50f);
+        }
 
         const int size = 12;
         picture = new Texture2D(size, size);
@@ -419,13 +494,13 @@ public partial class BlockInteractor
                 bool inside = dx * dx + dy * dy <= 1f;
                 bool speckle = (x * 5 + y * 3) % 7 == 0;
 
-                picture.SetPixel(x, y, !inside ? Color.clear : speckle ? spots : shell);
+                Color spot = egg == UnicornEgg ? RainbowSpots[(x + y) % RainbowSpots.Length] : spots;
+                picture.SetPixel(x, y, !inside ? Color.clear : speckle ? spot : shell);
             }
         }
         picture.Apply();
 
-        if (villager) villagerEggPicture = picture;
-        else eggPicture = picture;
+        eggPictures[egg] = picture;
         return picture;
     }
 }
