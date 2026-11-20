@@ -137,6 +137,20 @@ public static class WorldSaves
         }
     }
 
+    // Survival worlds: you start with nothing, collect every block you break,
+    // and have hearts and food to look after. Creative worlds (the way the
+    // game always worked) have everything. Old worlds are creative.
+    public static bool IsSurvival(int slot)
+    {
+        return PlayerPrefs.GetString("world" + (slot + 1) + "-mode", "creative") == "survival";
+    }
+
+    public static void SetSurvival(int slot, bool survival)
+    {
+        PlayerPrefs.SetString("world" + (slot + 1) + "-mode", survival ? "survival" : "creative");
+        PlayerPrefs.Save();
+    }
+
     // Deleting a world deletes its Magic Land too
     public static void Delete(int slot)
     {
@@ -157,6 +171,21 @@ public static class WorldSaves
         PlayerPrefs.DeleteKey("world" + (slot + 1) + "-dragons-magic");
         PlayerPrefs.DeleteKey("world" + (slot + 1) + "-dragons-nether");
         PlayerPrefs.DeleteKey("world" + (slot + 1) + "-firefolk");
+
+        // ...and, for a survival world, your blocks, hearts and food
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-mode");
+        StarShrine.Forget(slot);
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-bed");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-armour");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-pets");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-time");
+        foreach (string place in new[] { "home", "magic", "nether" })
+            PlayerPrefs.DeleteKey("world" + (slot + 1) + "-vehicles-" + place);
+        Structures.Forget(slot);   // a new world gets a new shrine
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-stash");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-survival-hotbar");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-health");
+        PlayerPrefs.DeleteKey("world" + (slot + 1) + "-food");
         PlayerPrefs.Save();
     }
 }

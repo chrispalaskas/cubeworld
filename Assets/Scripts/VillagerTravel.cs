@@ -86,7 +86,9 @@ public partial class Villager
             return;
         }
 
-        Vector3 middle = world.FindSpawnPoint();
+        // At home in the village, if there is one (Structures.cs)
+        Vector3 middle;
+        if (!Structures.VillageCentre(out middle)) middle = world.FindSpawnPoint();
         for (int i = 0; i < HowMany - away.Count; i++)
         {
             Vector3 spot;

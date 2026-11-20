@@ -26,7 +26,8 @@ public class Firework : MonoBehaviour
             {
                 Glowing(new Color(1.0f, 0.2f, 0.2f)), Glowing(new Color(1.0f, 0.8f, 0.2f)),
                 Glowing(new Color(0.3f, 1.0f, 0.3f)), Glowing(new Color(0.3f, 0.6f, 1.0f)),
-                Glowing(new Color(0.9f, 0.4f, 1.0f)), Glowing(Color.white)
+                Glowing(new Color(0.9f, 0.4f, 1.0f)), Glowing(Color.white),
+                Glowing(new Color(1.0f, 0.5f, 0.1f)), Glowing(new Color(0.2f, 1.0f, 0.9f)), Glowing(new Color(1.0f, 0.4f, 0.7f))
             };
             rocketLook = BlockWorld.MakeMaterial(new Color(0.8f, 0.15f, 0.1f));
         }
@@ -79,8 +80,34 @@ public class Firework : MonoBehaviour
         Material first = colours[Random.Range(0, colours.Length)];
         Material second = colours[Random.Range(0, colours.Length)];
         flash.color = first.color;
-        for (int i = 0; i < SparkCount; i++)
-            StartCoroutine(Spark(burst, Random.onUnitSphere * SparkSpeed, i % 2 == 0 ? first : second, SparkSeconds));
+        // Every firework is a surprise: a ball, a ring, a heart, a star, or a
+        // big double burst
+        int shape = Random.Range(0, 5);
+        Quaternion tilt = Quaternion.Euler(Random.Range(-30f, 30f), Random.Range(0f, 360f), 0f);
+        int sparks = shape == 4 ? SparkCount * 2 : SparkCount;
+        for (int i = 0; i < sparks; i++)
+        {
+            float a = i / (float)sparks * Mathf.PI * 2f;
+            Vector3 way;
+            switch (shape)
+            {
+                case 1:   // a ring
+                    way = tilt * new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                    break;
+                case 2:   // a heart, standing up
+                    way = tilt * new Vector3(16f * Mathf.Pow(Mathf.Sin(a), 3f),
+                                             13f * Mathf.Cos(a) - 5f * Mathf.Cos(2f * a) - 2f * Mathf.Cos(3f * a) - Mathf.Cos(4f * a), 0f) / 16f;
+                    break;
+                case 3:   // a five-pointed star
+                    float point = 0.55f + 0.45f * Mathf.Abs(Mathf.Cos(a * 2.5f));
+                    way = tilt * new Vector3(Mathf.Cos(a), Mathf.Sin(a), 0f) * point;
+                    break;
+                default:  // a ball (or two balls, one inside the other)
+                    way = Random.onUnitSphere * (shape == 4 && i % 2 == 0 ? 0.55f : 1f);
+                    break;
+            }
+            StartCoroutine(Spark(burst, way * SparkSpeed, i % 2 == 0 ? first : second, SparkSeconds));
+        }
 
         for (float t = 0f; t < 1f; t += Time.deltaTime / 0.5f)
         {

@@ -3,7 +3,8 @@ using UnityEngine.Rendering;
 
 // Breaking blocks, placing blocks, and choosing which block to place.
 // The crafting table screen lives in CraftingTable.cs, swords in Swords.cs,
-// chests in Chests.cs and wings in Wings.cs.
+// chests in Chests.cs, wings in Wings.cs, and buttons, cables and
+// dispensers in Machines.cs.
 public partial class BlockInteractor : MonoBehaviour
 {
     [Tooltip("How far away you can reach, in blocks")]
@@ -64,7 +65,21 @@ public partial class BlockInteractor : MonoBehaviour
         BlockWorld.RainbowYellow, BlockWorld.RainbowGreen, BlockWorld.RainbowBlue, BlockWorld.RainbowPurple,
         BlockWorld.Chest, BlockWorld.MushroomStem, BlockWorld.MushroomCap, UnicornEgg, Wings, DragonEgg,
         BlockWorld.FirePortal, BlockWorld.EmberRock, BlockWorld.Ash, BlockWorld.Lava, BlockWorld.FireCrystal,
-        BlockWorld.FireVent, BlockWorld.Fire, FireVillagerEgg
+        BlockWorld.FireVent, BlockWorld.Fire, FireVillagerEgg, BlockWorld.Button, BlockWorld.Cable,
+        BlockWorld.DispenserNorth, BlockWorld.PressurePlate, BlockWorld.Timer, BlockWorld.SignalLight,
+        BlockWorld.NoteBlock, BlockWorld.PistonNorth, BlockWorld.ConveyorNorth, BlockWorld.StarCrystal,
+        BlockWorld.Sink, BlockWorld.Toilet, BlockWorld.Bathtub, BlockWorld.Bed, BlockWorld.Table, BlockWorld.Chair,
+        BlockWorld.Couch, BlockWorld.Stove, BlockWorld.Fridge, BlockWorld.Window, BlockWorld.Rug, BlockWorld.Painting,
+        BlockWorld.Furnace, BlockWorld.Gravel, BlockWorld.Farmland, Seeds, WheatItem,
+        WoodenPickaxe, StonePickaxe, IronPickaxe, DiamondPickaxe, WoodenAxe, StoneAxe, IronAxe, DiamondAxe,
+        WoodenShovel, StoneShovel, IronShovel, DiamondShovel,
+        BlockWorld.StoneSlab, BlockWorld.PlankSlab, BlockWorld.Fence, BlockWorld.LadderFirst, BlockWorld.SignFirst,
+        BlockWorld.WoolFirst, BlockWorld.WoolFirst + 1, BlockWorld.WoolFirst + 2, BlockWorld.WoolFirst + 3,
+        BlockWorld.WoolFirst + 4, BlockWorld.WoolFirst + 5, BlockWorld.WoolFirst + 6, BlockWorld.WoolFirst + 7,
+        BlockWorld.Cactus, BlockWorld.Trampoline, BlockWorld.SlideFirst, BlockWorld.RailNS, BlockWorld.Minecart, BlockWorld.Boat,
+        BlockWorld.Bow, BlockWorld.Arrow, BlockWorld.FishingRod, BlockWorld.LeatherArmour, BlockWorld.IronArmour, BlockWorld.DiamondArmour,
+        BlockWorld.Compass, BlockWorld.TreasureMap, BlockWorld.Leather, BlockWorld.Feather, BlockWorld.StringItem,
+        BlockWorld.RawBeef, BlockWorld.RawFish
     };
     // The inventory works out how many columns to use so it fits your screen
     // (see DrawInventory), and scrolls if it really can't fit
@@ -88,7 +103,29 @@ public partial class BlockInteractor : MonoBehaviour
         "Magic Villager Egg", "Rainbow",
         "Glowing Red", "Glowing Orange", "Glowing Yellow", "Glowing Green", "Glowing Blue", "Glowing Purple",
         "Chest", "Mushroom Stem", "Mushroom Cap", "Unicorn Egg", "Wings", "Dragon Egg",
-        "Fire Portal", "Ember Rock", "Ash", "Lava", "Fire Crystal", "Fire Vent", "Fire", "Fire Villager Egg"
+        "Fire Portal", "Ember Rock", "Ash", "Lava", "Fire Crystal", "Fire Vent", "Fire", "Fire Villager Egg",
+        "Button", "Cable", "Dispenser", "", "", "",   // (the other three are the same dispenser facing other ways)
+        "Pressure Plate", "Timer", "Signal Light", "Note Block",
+        "Piston", "", "", "",                         // (pistons and conveyors come in four directions too)
+        "Conveyor Belt", "", "", "",
+        "Apple", "Golden Apple", "Raw Chicken",       // food, in survival worlds
+        "Star Crystal",
+        // Furniture - four numbers each, one for each way it faces
+        "Sink", "", "", "", "Toilet", "", "", "", "Bathtub", "", "", "", "Bed", "", "", "",
+        "Table", "", "", "", "Chair", "", "", "", "Couch", "", "", "", "Stove", "", "", "",
+        "Fridge", "", "", "", "Window", "", "", "", "Rug", "", "", "", "Painting", "", "", "",
+        "Furnace", "", "", "",
+        "Gravel", "Farmland", "Wheat (growing)", "Wheat (growing)", "Wheat (growing)", "Ripe Wheat",
+        "Wooden Pickaxe", "Stone Pickaxe", "Iron Pickaxe", "Diamond Pickaxe",
+        "Wooden Axe", "Stone Axe", "Iron Axe", "Diamond Axe",
+        "Wooden Shovel", "Stone Shovel", "Iron Shovel", "Diamond Shovel",
+        "Seeds", "Wheat", "Bread", "Cooked Chicken",
+        "Stone Slab", "Plank Slab", "Fence", "Ladder", "", "", "", "Sign", "", "", "",
+        "White Wool", "Red Wool", "Orange Wool", "Yellow Wool", "Green Wool", "Blue Wool", "Purple Wool", "Black Wool",
+        "Cactus", "Trampoline", "Slide", "", "", "", "Rails", "Rails", "Monster Cage", "",
+        "Raw Beef", "Steak", "Raw Pork", "Cooked Pork", "Raw Fish", "Cooked Fish", "Leather", "Feather", "String",
+        "Fishing Rod", "Bow", "Arrow", "Leather Armour", "Iron Armour", "Diamond Armour", "Treasure Map", "Compass",
+        "Minecart", "Boat"
     };
 
     // While the inventory is open, other scripts leave the keys and mouse alone.
@@ -114,21 +151,39 @@ public partial class BlockInteractor : MonoBehaviour
 
     void Start()
     {
+        Me = this;
         cam = Camera.main;
         body = GetComponent<CharacterController>();
         BuildHand();
         LoadCrafted();
-        LoadHotbar();
+        if (Survival) LoadSurvival();
+        else LoadHotbar();
+    }
+
+    // The player's hands - so dropped items know who picks them up
+    public static BlockInteractor Me { get; private set; }
+
+    // A dropped item was walked over (survival)
+    public static bool PickUp(byte item, int count)
+    {
+        if (Me == null || !Survival) return false;
+        Me.Give(item, count);
+        return true;
     }
 
     void Update()
     {
+        if (Tutorial.IsOpen) return;   // the game waits while you watch the tutorial
+        RunMachines();   // timers and pressure plates (Machines.cs)
         ChooseBlock();
         MoveHand();
 
+        if (PlayerHealth.Instance != null && PlayerHealth.Instance.Dead) return;   // no building while you're knocked out
+
         if (InventoryOpen)
         {
-            if (crafting) CraftingKeys();
+            if (writingSign) { }   // the typing is all done in DrawSignWriting
+            else if (crafting) CraftingKeys();
             else if (chestOpen) ChestKeys();
             else InventoryKeys();
             return;
@@ -143,28 +198,55 @@ public partial class BlockInteractor : MonoBehaviour
             return;
         }
 
+        Dragon riddenDragon = GetComponent<FirstPersonPlayer>().RidingOn as Dragon;
+        bool usesHands = riddenDragon == null && selected != Sponge && selected != Leash && !IsSword(selected) && selected != BlockWorld.Bow;
+        Vehicle clickedVehicle;
+
         if (Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Q))
         {
-            Dragon dragon = GetComponent<FirstPersonPlayer>().RidingOn as Dragon;
-            if (dragon != null)
-                dragon.BreatheFire(cam.transform.forward);   // riding a dragon? Fire!
+            if (riddenDragon != null)
+                riddenDragon.BreatheFire(cam.transform.forward);   // riding a dragon? Fire!
             else if (selected == Sponge)
                 WipeWater();
             else if (selected == Leash)
                 UseLeash();
+            else if (LookingAtVehicle(out clickedVehicle))
+            {
+                PickUpVehicle(clickedVehicle);   // a boat or minecart back into your pocket
+                waitForLetGo = true;
+            }
+            else if (selected == BlockWorld.Bow)
+                ShootArrow();
             else if (IsSword(selected))
                 Swing();
-            else
-                Break();
+            else if (Survival && Punch())
+                waitForLetGo = true;   // bonk - a monster or a chicken (and no digging till you let go)
+            else if (!Survival)
+                Break();   // in creative, one click breaks anything
         }
+
+        // In survival, hold the button down to dig (Tools.cs)
+        bool held = Input.GetMouseButton(0) || Input.GetKey(KeyCode.Q);
+        if (!held) waitForLetGo = false;
+        if (Survival && held && usesHands) KeepDigging();
+        else if (digging) StopDigging();
         else if (Input.GetMouseButtonDown(1) || Input.GetKeyDown(KeyCode.E))
         {
             Vector3Int door;
             Vector3Int chest;
+            Vector3Int button;
+            Vector3Int note;
+            Vector3Int furniture;
+            byte furnitureKind;
+            Vector3Int sign;
+            Vehicle ride;
+            Monster critter;
             MonoBehaviour mount;
             FirstPersonPlayer me = GetComponent<FirstPersonPlayer>();
 
-            if (me.IsRiding)
+            if (me.InVehicle != null)
+                me.LeaveVehicle();   // out of the boat or minecart
+            else if (me.IsRiding)
                 me.Dismount();   // E again gets you off
             else if (LookingAtRideable(out mount))
             {
@@ -175,10 +257,22 @@ public partial class BlockInteractor : MonoBehaviour
                 }
                 me.Mount(mount);
             }
+            else if (LookingAtVehicle(out ride))
+                me.Board(ride);
+            else if (LookingAtCritter(out critter) && critter.Interact(selected))
+                squeezeTime = 0.15f;   // shearing, taming, patting...
             else if (LookingAtCraftingTable())
                 OpenCrafting();
+            else if (LookingAtSign(out sign) && selected != BlockWorld.SignFirst)
+                StartWritingSign(sign);
             else if (LookingAtChest(out chest))
-                OpenChest(chest);
+                OpenChest(chest);   // a chest, or a dispenser
+            else if (LookingAtButton(out button))
+                PressButton(button);
+            else if (LookingAtNoteBlock(out note))
+                TuneNote(note);
+            else if (LookingAtUsableFurniture(out furniture, out furnitureKind))
+                UseFurniture(furniture, furnitureKind);
             else if (LookingAtDoor(out door))
                 OpenOrCloseDoor(door);
             else
@@ -188,6 +282,7 @@ public partial class BlockInteractor : MonoBehaviour
 
     void ChooseBlock()
     {
+        if (writingSign || typingSearch) return;   // typing numbers shouldn't change the hotbar
         // Number keys jump straight to a slot...
         for (int i = 0; i < hotbar.Length; i++)
         {
@@ -198,6 +293,11 @@ public partial class BlockInteractor : MonoBehaviour
         // ...and the mouse wheel steps along, wrapping round at the ends.
         // (With the inventory open, the wheel scrolls the inventory instead.)
         float scroll = Input.mouseScrollDelta.y;
+        if (InventoryOpen && crafting && scroll != 0f && Input.mousePosition.x > Screen.width * 0.4f)
+        {
+            recipeScroll += scroll < 0f ? 2 : -2;   // the wheel scrolls the recipe list
+            return;
+        }
         if (InventoryOpen && !crafting && !chestOpen)
         {
             if (scroll < 0f) inventoryScroll++;
@@ -246,12 +346,27 @@ public partial class BlockInteractor : MonoBehaviour
         Vector3Int lava;
         if (LookingAtLavaOrFire(out lava))
         {
+            Sounds.Break(BlockWorld.Instance.GetBlock(lava.x, lava.y, lava.z), lava);
+            CollectBroken(BlockWorld.Instance.GetBlock(lava.x, lava.y, lava.z), lava);
             BlockWorld.Instance.SetBlock(lava.x, lava.y, lava.z, BlockWorld.Air);
             return;
         }
 
         Vector3Int block, unused;
         if (!LookingAtBlock(out block, out unused)) return;
+
+        // In survival, it goes in your pockets (a whole door is one door)
+        byte broken = BlockWorld.Instance.GetBlock(block.x, block.y, block.z);
+        Sounds.Break(broken, block);
+        CollectBroken(broken, block);
+
+        // The Star Crystal! In creative, finding it puts it in your inventory for good
+        if (broken == BlockWorld.StarCrystal)
+        {
+            if (!Survival && crafted.Add(BlockWorld.StarCrystal)) SaveCrafted();
+            PortalTraveller.Announce("You found the Star Crystal! Put it anywhere - it shines, heals you, and scares off monsters.");
+            Achievements.Unlock("star");
+        }
 
         // Break one half of a door and the other half goes too
         Vector3Int otherHalf;
@@ -288,7 +403,9 @@ public partial class BlockInteractor : MonoBehaviour
             lava = Vector3Int.RoundToInt(point);
 
             byte type = BlockWorld.Instance.GetBlock(lava.x, lava.y, lava.z);
-            if (type == BlockWorld.Lava || type == BlockWorld.Fire) return true;
+            if (type == BlockWorld.Lava || type == BlockWorld.Fire || type == BlockWorld.Cable || type == BlockWorld.PressurePlate ||
+                BlockWorld.IsWheat(type) || BlockWorld.IsRail(type))
+                return true;   // cable, pressure plates, wheat and rails too - they're not solid
             if (type != BlockWorld.Air && type != BlockWorld.Water) return false;
         }
 
@@ -329,96 +446,128 @@ public partial class BlockInteractor : MonoBehaviour
 
         Vector3Int water;
         if (LookingAtWater(out water))
+        {
             BlockWorld.Instance.SetBlock(water.x, water.y, water.z, BlockWorld.Air);
+            Give(BlockWorld.Water);   // in survival, the sponge squeezes it out into your pockets
+        }
     }
 
+    // Places whatever is in your hand - and in survival, uses one up
     void Place()
     {
-        if (selected == Sponge || selected == Leash || IsSword(selected) || selected == Wings) return;
+        if (IsFood(selected))
+        {
+            Eat(selected);
+            return;
+        }
+        if (Survival && !HaveGot(selected)) return;
+        if (UseGear()) return;   // bows, rods, armour, boats... (Gear.cs)
+
+        byte holding = selected;
+        if (PlaceSelected()) UseUp(holding);
+    }
+
+    // Things you hold that don't go down as a block
+    static bool NotPlaceable(byte item)
+    {
+        return item == BlockWorld.Air || item == Sponge || item == Leash || IsSword(item) || item == Wings ||
+               IsDiggingTool(item) || item == WheatItem || (item >= BlockWorld.RawBeef && item <= BlockWorld.Boat);
+    }
+
+    // True if something was placed (or hatched, or launched...)
+    bool PlaceSelected()
+    {
+        if (NotPlaceable(selected)) return false;
+        if (selected == Seeds) return PlantSeeds();   // (Farming.cs)
 
         Vector3Int unused, target;
         if (selected == BlockWorld.Water)
         {
-            if (!LookingAtSpaceBeforeWater(out target)) return;
+            if (!LookingAtSpaceBeforeWater(out target)) return false;
         }
-        else if (!LookingAtBlock(out unused, out target)) return;
+        else if (!LookingAtBlock(out unused, out target)) return false;
 
         byte there = BlockWorld.Instance.GetBlock(target.x, target.y, target.z);
         if (there != BlockWorld.Air && there != BlockWorld.Water && there != BlockWorld.Lava && there != BlockWorld.Fire)
-            return;   // you can build into water, lava and fire
+            return false;   // you can build into water, lava and fire
 
         // An egg isn't a block - a chicken hatches out, standing in that space
         if (selected == ChickenEgg)
         {
             ChickenRespawner.Hatch(new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == VillagerEgg)
         {
             Villager.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == MagicVillagerEgg)
         {
             Villager.HatchMagic(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == FireVillagerEgg)
         {
             Villager.HatchFire(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == DragonEgg)
         {
             Dragon.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == UnicornEgg)
         {
             Unicorn.Hatch(BlockWorld.Instance, new Vector3(target.x, target.y - 0.5f, target.z));
-            return;
+            return true;
         }
 
         if (selected == RainbowArch)
         {
             BlockWorld.Instance.BuildRainbow(target, transform.forward);
-            return;
+            return true;
         }
 
         // A sapling shoots straight up into a full-grown tree, if there's room
         if (selected == Sapling)
         {
-            BlockWorld.Instance.GrowTreeAt(target.x, target.y, target.z);
-            return;
+            return BlockWorld.Instance.GrowTreeAt(target.x, target.y, target.z);
         }
 
         if (selected == FireworkRocket)
         {
             Firework.Launch(target);
-            return;
+            return true;
         }
 
-        if (WouldHitPlayer(target)) return;
+        if (WouldHitPlayer(target)) return false;
 
         if (selected == BlockWorld.DoorItem)
         {
-            PlaceDoor(target);
-            return;
+            return PlaceDoor(target);
         }
 
         // Stairs go up the way you're facing, so you can walk straight up them
-        byte block = selected == BlockWorld.StairsNorth ? StairsFacingAway() : selected;
+        byte block = selected == BlockWorld.StairsNorth ? StairsFacingAway()
+                   : selected == BlockWorld.DispenserNorth ? DispenserFacingMe()
+                   : selected == BlockWorld.PistonNorth ? FacingAway(BlockWorld.PistonNorth)
+                   : selected == BlockWorld.ConveyorNorth ? FacingAway(BlockWorld.ConveyorNorth)
+                   : BlockWorld.IsFurniture(selected) ? FurnitureFacingMe(selected)
+                   : TurnedFor(selected, target);
         BlockWorld.Instance.SetBlock(target.x, target.y, target.z, block);
+        Sounds.Place(block, target);
 
         if (selected == BlockWorld.Tnt)
             Tnt.Ignite(BlockWorld.Instance, target, Tnt.FuseSeconds);
         else if (selected == BlockWorld.MegaTnt)
             Tnt.Ignite(BlockWorld.Instance, target, Tnt.MegaFuseSeconds);
+        return true;
     }
 
     // --- Stairs and doors ---
@@ -432,12 +581,12 @@ public partial class BlockInteractor : MonoBehaviour
     }
 
     // A door needs two empty blocks, one on top of the other
-    void PlaceDoor(Vector3Int bottom)
+    bool PlaceDoor(Vector3Int bottom)
     {
         Vector3Int top = bottom + Vector3Int.up;
         byte above = BlockWorld.Instance.GetBlock(top.x, top.y, top.z);
-        if (above != BlockWorld.Air && above != BlockWorld.Water) return;
-        if (top.y >= BlockWorld.SizeY || WouldHitPlayer(top)) return;
+        if (above != BlockWorld.Air && above != BlockWorld.Water) return false;
+        if (top.y >= BlockWorld.SizeY || WouldHitPlayer(top)) return false;
 
         // It goes across the way you're looking, so you walk straight through it
         Vector3 f = transform.forward;
@@ -445,6 +594,7 @@ public partial class BlockInteractor : MonoBehaviour
 
         BlockWorld.Instance.SetBlock(bottom.x, bottom.y, bottom.z, BlockWorld.MakeDoor(false, false, alongX));
         BlockWorld.Instance.SetBlock(top.x, top.y, top.z, BlockWorld.MakeDoor(true, false, alongX));
+        return true;
     }
 
     bool LookingAtDoor(out Vector3Int door)
@@ -474,6 +624,7 @@ public partial class BlockInteractor : MonoBehaviour
             byte flipped = BlockWorld.MakeDoor(BlockWorld.DoorIsTop(door), !BlockWorld.DoorIsOpen(door), BlockWorld.DoorAlongX(door));
             BlockWorld.Instance.SetBlock(cell.x, cell.y, cell.z, flipped);
         }
+        Sounds.Door(half);
     }
 
     // Don't let us build a block inside our own body and get stuck
@@ -500,6 +651,7 @@ public partial class BlockInteractor : MonoBehaviour
     {
         InventoryOpen = false;
         crafting = false;
+        pocketCrafting = false;
         chestOpen = false;
         InventoryClosedFrame = Time.frameCount;
         Cursor.lockState = CursorLockMode.Locked;
@@ -514,8 +666,18 @@ public partial class BlockInteractor : MonoBehaviour
             return;
         }
 
+        // C: craft without a table (survival)
+        if (Survival && Input.GetKeyDown(KeyCode.C))
+        {
+            OpenPocketCrafting();
+            return;
+        }
+
         // Arrows move around the grid; Enter or Space puts that item in your hand
-        int count = AllItems.Length;
+        byte[] items = InventoryItems();
+        int count = items.Length;
+        if (count == 0) return;   // nothing in your pockets yet
+        inventoryCursor = Mathf.Min(inventoryCursor, count - 1);
         if (Input.GetKeyDown(KeyCode.RightArrow)) inventoryCursor = (inventoryCursor + 1) % count;
         if (Input.GetKeyDown(KeyCode.LeftArrow))  inventoryCursor = (inventoryCursor + count - 1) % count;
         if (Input.GetKeyDown(KeyCode.DownArrow) && inventoryCursor + inventoryColumns < count) inventoryCursor += inventoryColumns;
@@ -525,7 +687,7 @@ public partial class BlockInteractor : MonoBehaviour
             inventoryCursorMovedByKeys = true;   // so the view scrolls to follow it
 
         if (EnterPressed())
-            PutInHotbar(AllItems[inventoryCursor]);
+            PutInHotbar(items[inventoryCursor]);
     }
 
     // Enter or Space means "yes, this one"
@@ -549,8 +711,9 @@ public partial class BlockInteractor : MonoBehaviour
     // The hotbar is remembered between games, in every world
     void SaveHotbar()
     {
-        PlayerPrefs.SetString("hotbar", string.Join(",", hotbar));
-        PlayerPrefs.Save();
+        // (a survival world has its own hotbar)
+        PlayerPrefs.SetString(Survival ? survivalKey + "survival-hotbar" : "hotbar", string.Join(",", hotbar));
+        if (!Survival) PlayerPrefs.Save();
     }
 
     void LoadHotbar()
@@ -588,10 +751,14 @@ public partial class BlockInteractor : MonoBehaviour
 
     // Animals have no colliders for a raycast to hit, so we check each one
     // to see how close it is to the line we're looking along
-    MonoBehaviour AnimalInSights(float reach)
+    MonoBehaviour AnimalInSights(float reach, bool zombiesToo = false)
     {
         MonoBehaviour closest = null;
         float closestDistance = reach;
+
+        if (zombiesToo)
+            foreach (Monster monster in Monster.All)
+                CheckAnimal(monster, ref closest, ref closestDistance);
 
         foreach (Chicken chicken in FindObjectsByType<Chicken>(FindObjectsSortMode.None))
             CheckAnimal(chicken, ref closest, ref closestDistance);
@@ -625,6 +792,7 @@ public partial class BlockInteractor : MonoBehaviour
         if (animal is Villager) return 0.6f;
         if (animal is Unicorn) return 0.55f;
         if (animal is Dragon) return 0.9f;
+        if (animal is Monster) return ((Monster)animal).AimHeight;
         return 0.25f;
     }
 
@@ -634,7 +802,7 @@ public partial class BlockInteractor : MonoBehaviour
         float along = Vector3.Dot(toAnimal, cam.transform.forward);
 
         if (along < 0f || along > closestDistance) return;                               // behind us or too far
-        float size = animal is Dragon ? 1.2f : 0.6f;   // dragons are big, so they're easier to aim at
+        float size = animal is Dragon ? 1.2f : animal is Monster ? ((Monster)animal).HitSize : 0.6f;   // dragons are big, so they're easier to aim at
         if ((toAnimal - cam.transform.forward * along).magnitude > size) return;        // not lined up
         if (WallInTheWay(along)) return;
 
@@ -676,9 +844,13 @@ public partial class BlockInteractor : MonoBehaviour
     void OnDestroy()
     {
         InventoryOpen = false;
+        PlayerPrefs.Save();   // survival pockets
         if (hand != null) Destroy(hand);
         if (rope != null) Destroy(rope);
         if (wingsView != null) Destroy(wingsView);
+        if (cracks != null) Destroy(cracks);
+        StopFishing();
+        if (Me == this) Me = null;
     }
 
     // --- The tools in your hand ---
@@ -697,6 +869,7 @@ public partial class BlockInteractor : MonoBehaviour
                     BlockWorld.MakeMaterial(new Color(0.90f, 0.70f, 0.55f)));   // your hand, gripping it from below
 
         BuildSword();
+        BuildTool();
         BuildWings();
         hand.SetActive(false);
 
@@ -740,10 +913,12 @@ public partial class BlockInteractor : MonoBehaviour
 
     void MoveHand()
     {
-        hand.SetActive(selected == Sponge || selected == Leash || IsSword(selected));
+        hand.SetActive(selected == Sponge || selected == Leash || IsSword(selected) || IsDiggingTool(selected));
         spongeInHand.SetActive(selected == Sponge);
         leashInHand.SetActive(selected == Leash);
         MoveSword();
+        MoveTool();
+        MoveFishing();
         MoveWings();
 
         squeezeTime = Mathf.Max(squeezeTime - Time.deltaTime, 0f);
@@ -760,11 +935,16 @@ public partial class BlockInteractor : MonoBehaviour
 
         GUI.Label(new Rect(12, 10, 800, 24), "WASD move   Arrows or mouse look   Space jump / swim up");
         GUI.Label(new Rect(12, 30, 800, 24), "Q or left click: break / wipe water / leash / swing sword   E or right click: place / open door   Esc frees mouse, Enter returns");
-        GUI.Label(new Rect(12, 50, 800, 24), "1-9, 0 or mouse wheel: choose from the hotbar");
+        GUI.Label(new Rect(12, 50, 800, 24), "1-9, 0 or mouse wheel: choose from the hotbar     H: how to play (watch the tutorial)");
 
         GUI.Label(new Rect(12, 70, 800, 24), "I or Tab: inventory   E or right click on a crafting table or chest: open it   E on a unicorn or dragon: ride (Space flies)");
+        if (Survival)
+            GUI.Label(new Rect(12, 90, 900, 24), "Survival: break blocks to collect them, craft the rest (place your crafting table, then turn Wood into Planks). No table? Press C in your inventory. Hold food and press E to eat. Left click a monster to fight it!");
 
-        if (InventoryOpen && crafting) DrawCrafting();
+        DrawSleep();
+        DrawGearHud();
+        if (InventoryOpen && writingSign) DrawSignWriting();
+        else if (InventoryOpen && crafting) DrawCrafting();
         else if (InventoryOpen && chestOpen) DrawChest();
         else if (InventoryOpen) DrawInventory();
         DrawHotbar();
@@ -787,33 +967,9 @@ public partial class BlockInteractor : MonoBehaviour
             GUI.color = new Color(0.55f, 0.38f, 0.20f);
             GUI.DrawTexture(icon, Texture2D.whiteTexture);
         }
-        else if (item == ChickenEgg || item == VillagerEgg || item == MagicVillagerEgg || item == UnicornEgg || item == DragonEgg || item == FireVillagerEgg)
+        else if (PictureOf(item) != null)
         {
-            GUI.DrawTexture(icon, EggPicture(item));
-        }
-        else if (item == Sapling || item == FireworkRocket)
-        {
-            GUI.DrawTexture(icon, item == Sapling ? SaplingPicture() : FireworkPicture());
-        }
-        else if (item == RainbowArch)
-        {
-            GUI.DrawTexture(icon, RainbowPicture());
-        }
-        else if (item == Wings)
-        {
-            GUI.DrawTexture(icon, WingsPicture());
-        }
-        else if (item == BlockWorld.Fire)
-        {
-            GUI.DrawTexture(icon, FirePicture());
-        }
-        else if (IsSword(item))
-        {
-            GUI.DrawTexture(icon, SwordPicture(item));
-        }
-        else if (item == BlockWorld.StairsNorth)
-        {
-            GUI.DrawTexture(icon, StairsPicture());
+            GUI.DrawTexture(icon, PictureOf(item));
         }
         else if (look != null)
         {
@@ -824,6 +980,30 @@ public partial class BlockInteractor : MonoBehaviour
         }
 
         GUI.color = before;
+    }
+
+    // The little picture for anything that isn't drawn with its block's own
+    // look (eggs, tools, food, furniture...) - or null for plain blocks
+    public static Texture2D PictureOf(byte item)
+    {
+        if (item == ChickenEgg || item == VillagerEgg || item == MagicVillagerEgg || item == UnicornEgg ||
+            item == DragonEgg || item == FireVillagerEgg) return EggPicture(item);
+        if (item == Sapling) return SaplingPicture();
+        if (item == FireworkRocket) return FireworkPicture();
+        if (item == RainbowArch) return RainbowPicture();
+        if (item == Wings) return WingsPicture();
+        if (BlockWorld.IsFurniture(item)) return FurniturePicture(BlockWorld.FurnitureItem(item));
+        Texture2D gear = GearPicture(item);   // (Gear.cs)
+        if (gear != null) return gear;
+        if (IsFood(item)) return FoodPicture(item);
+        if (item == Seeds || item == WheatItem) return FarmPicture(item);
+        if (item == BlockWorld.Cable) return CablePicture();
+        if (item == BlockWorld.DispenserNorth) return DispenserPicture();
+        if (item == BlockWorld.Fire) return FirePicture();
+        if (IsSword(item)) return SwordPicture(item);
+        if (IsDiggingTool(item)) return ToolPicture(item);
+        if (item == BlockWorld.StairsNorth) return StairsPicture();
+        return null;
     }
 
     // A grid of every item. Clicking one (or Enter on the highlighted one)
@@ -839,7 +1019,19 @@ public partial class BlockInteractor : MonoBehaviour
         // the item name, help and hotbar below it
         const float gap = 6f;
         const float smallest = 34f;   // any smaller and the pictures are hard to make out
-        int count = AllItems.Length;
+        byte[] items = InventoryItems();
+        int count = items.Length;
+        if (count == 0)
+        {
+            Rect empty = new Rect(Screen.width / 2f - 260f, 80f, 520f, 90f);
+            GUI.Box(empty, "");
+            GUI.Label(new Rect(empty.x, empty.y + 14f, empty.width, 24f), "Inventory", centredLabel);
+            GUI.Label(new Rect(empty.x, empty.y + 40f, empty.width, 24f),
+                      "Your pockets are empty! Break some blocks to collect them.", centredLabel);
+            PocketCraftButton(new Rect(Screen.width / 2f - 130f, empty.yMax + 6f, 260f, 30f));
+            return;
+        }
+        inventoryCursor = Mathf.Min(inventoryCursor, count - 1);
         float roomWide = Screen.width - 64f;
         float roomHigh = Screen.height - 250f;
 
@@ -905,7 +1097,7 @@ public partial class BlockInteractor : MonoBehaviour
             if (e.type == EventType.MouseDown && e.button == 0 && box.Contains(e.mousePosition))
             {
                 inventoryCursor = i;
-                PutInHotbar(AllItems[i]);
+                PutInHotbar(items[i]);
                 e.Use();
             }
 
@@ -919,16 +1111,21 @@ public partial class BlockInteractor : MonoBehaviour
             GUI.color = before;
 
             // Things you haven't made yet are a mystery
-            if (HaveGot(AllItems[i]))
-                DrawItemIcon(new Rect(box.x + size * 0.15f, box.y + size * 0.15f, size * 0.7f, size * 0.7f), AllItems[i]);
+            if (HaveGot(items[i]))
+            {
+                DrawItemIcon(new Rect(box.x + size * 0.15f, box.y + size * 0.15f, size * 0.7f, size * 0.7f), items[i]);
+                DrawCount(box, items[i]);
+            }
             else
                 GUI.Label(box, "?", centredLabel);
         }
 
         float under = top + height + 6;
-        byte pointedAt = AllItems[inventoryCursor];
+        byte pointedAt = items[inventoryCursor];
         GUI.Label(new Rect(left, under, width, 24),
-                  HaveGot(pointedAt) ? ItemNames[pointedAt] : "??? - make it at a crafting table to find out", centredLabel);
+                  HaveGot(pointedAt) ? ItemNames[pointedAt]
+                  : pointedAt == BlockWorld.StarCrystal ? "??? - something rare, waiting at the very top of the highest mountain"
+                  : "??? - make it at a crafting table to find out", centredLabel);
 
         string help = "1-9, 0 or click the hotbar: choose a slot     I, Tab or Esc: close";
         if (rows > inventoryRowsShown)
@@ -937,14 +1134,24 @@ public partial class BlockInteractor : MonoBehaviour
             help = "Mouse wheel or arrows: scroll for more (row " + (inventoryScroll + 1) + " of " + (more + 1) + ")     " + help;
         }
         GUI.Label(new Rect(left - 16, under + 24, width + 32, 24), help, centredLabel);
+        PocketCraftButton(new Rect(Screen.width / 2f - 130f, under + 56f, 260f, 30f));
     }
 
+
+    // Survival only: a button to craft without a table
+    void PocketCraftButton(Rect where)
+    {
+        if (Survival && GUI.Button(where, "Craft without a table (C)"))
+            OpenPocketCrafting();
+    }
 
     // A row of slots along the bottom of the screen, with the picked one outlined
     void DrawHotbar()
     {
         if (centredLabel == null)
             centredLabel = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+        if (countStyle == null)
+            countStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.LowerRight, fontStyle = FontStyle.Bold, fontSize = 13 };
 
         const float gap = 4f;
         float size = Mathf.Min(52f, (Screen.width - 32f) / hotbar.Length - gap);   // shrink to fit narrow windows
@@ -977,12 +1184,14 @@ public partial class BlockInteractor : MonoBehaviour
 
             GUI.color = before;
             DrawItemIcon(new Rect(box.x + size * 0.2f, box.y + size * 0.2f, size * 0.6f, size * 0.6f), hotbar[i]);
+            DrawCount(box, hotbar[i]);
 
             GUI.color = Color.white;
             GUI.Label(new Rect(box.x + 3, box.y, 20, 20), SlotKeys[i]);
         }
 
         GUI.color = before;
-        GUI.Label(new Rect(0, top - 30, Screen.width, 24), ItemNames[selected], centredLabel);
+        // (in survival the hearts and food sit just above the hotbar, so the name goes higher)
+        GUI.Label(new Rect(0, top - (Survival ? 50 : 30), Screen.width, 24), ItemNames[selected], centredLabel);
     }
 }

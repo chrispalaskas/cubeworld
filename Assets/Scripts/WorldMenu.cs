@@ -21,6 +21,7 @@ public class WorldMenu : MonoBehaviour
 
     private int highlighted;             // the slot the keyboard is pointing at
     private int confirmingDelete = -1;   // the slot waiting for "are you sure?"
+    private int choosingMode = -1;       // the empty slot waiting for "creative or survival?"
     private string[] slotInfo = new string[WorldSaves.Slots];
     private string problem = "";
     private float showSavedUntil;
@@ -35,6 +36,9 @@ public class WorldMenu : MonoBehaviour
     public static int CurrentSlot { get { return instance != null && instance.Playing ? instance.currentSlot : -1; } }
     public static int CurrentPlace { get { return instance != null ? instance.currentPlace : WorldSaves.Home; } }
 
+    // Is the world you're playing a survival world?
+    public static bool Survival { get; private set; }
+
     void Awake()
     {
         instance = this;
@@ -47,12 +51,22 @@ public class WorldMenu : MonoBehaviour
 
     void Update()
     {
+        if (Tutorial.IsOpen) return;   // watching the tutorial
+
         if (!Playing)
         {
             // The mouse should always be free on the menu
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
             MenuKeys();
+            return;
+        }
+
+        // H: watch the tutorial (and it opens by itself the very first time you play)
+        if (!BlockInteractor.InventoryOpen && (Input.GetKeyDown(KeyCode.H) || PlayerPrefs.GetInt("tutorial-seen", 0) == 0))
+        {
+            PlayerPrefs.SetInt("tutorial-seen", 1);
+            Tutorial.Open();
             return;
         }
 
@@ -78,7 +92,22 @@ public class WorldMenu : MonoBehaviour
     {
         problem = "";
         confirmingDelete = -1;
+
+        // A brand new world? First choose what kind
+        if (!WorldSaves.Exists(slot))
+        {
+            highlighted = slot;
+            choosingMode = slot;
+            return;
+        }
         Enter(slot, WorldSaves.Exists(slot) ? WorldSaves.LastPlace(slot) : WorldSaves.Home);
+    }
+
+    void StartNew(int slot, bool survival)
+    {
+        choosingMode = -1;
+        WorldSaves.SetSurvival(slot, survival);
+        Enter(slot, WorldSaves.Home);
     }
 
     // Builds or loads one place of a world, and puts you in it
@@ -114,8 +143,16 @@ public class WorldMenu : MonoBehaviour
             return false;
         }
 
+        // Something rare and special at the top of the highest mountain
+        if (place == WorldSaves.Home)
+        {
+            StarShrine.BuildIfMissing(world, slot);
+            Structures.BuildIfMissing(world, slot);   // the village, dungeons and the Golem Hall
+        }
+
         currentSlot = slot;
         currentPlace = place;
+        Survival = WorldSaves.IsSurvival(slot);
         WorldSaves.SetLastPlace(slot, place);
         SetSky(place);
 
@@ -167,6 +204,8 @@ public class WorldMenu : MonoBehaviour
         if (Enter(currentSlot, destination))
         {
             if (wasRiding) player.MountNearestUnicornOnStart = true;   // still on its back when you arrive
+            if (destination == WorldSaves.Nether) Achievements.Unlock("nether");
+            if (destination == WorldSaves.MagicLand) Achievements.Unlock("magic");
             arrivalMessage = destination == WorldSaves.MagicLand ? "Welcome to the Magic Land!"
                            : destination == WorldSaves.Nether ? "Welcome to the Nether!"
                            : "Welcome home!";
@@ -213,6 +252,7 @@ public class WorldMenu : MonoBehaviour
         try
         {
             WorldSaves.Save(currentSlot, currentPlace, world, player);
+            Vehicle.SaveAll(currentSlot, currentPlace);
             showSavedUntil = Time.time + 2f;
         }
         catch (Exception e)
@@ -252,7 +292,7 @@ public class WorldMenu : MonoBehaviour
 
             DateTime? saved = WorldSaves.WhenSaved(i);
             slotInfo[i] = saved.HasValue
-                ? "Last played " + saved.Value.ToString("MMM d, h:mm tt")
+                ? (WorldSaves.IsSurvival(i) ? "Survival - " : "Creative - ") + "last played " + saved.Value.ToString("MMM d, h:mm tt")
                 : "Damaged save";
         }
     }
@@ -261,6 +301,17 @@ public class WorldMenu : MonoBehaviour
 
     void MenuKeys()
     {
+        if (choosingMode >= 0)
+        {
+            if (Input.GetKeyDown(KeyCode.C))
+                StartNew(choosingMode, false);
+            else if (Input.GetKeyDown(KeyCode.S))
+                StartNew(choosingMode, true);
+            else if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.N))
+                choosingMode = -1;
+            return;
+        }
+
         if (confirmingDelete >= 0)
         {
             if (Input.GetKeyDown(KeyCode.Y))
@@ -277,6 +328,7 @@ public class WorldMenu : MonoBehaviour
         else if (Input.GetKeyDown(KeyCode.Alpha2)) Open(1);
         else if (Input.GetKeyDown(KeyCode.Alpha3)) Open(2);
         else if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)) Open(highlighted);
+        else if (Input.GetKeyDown(KeyCode.H)) Tutorial.Open();
         else if ((Input.GetKeyDown(KeyCode.Delete) || Input.GetKeyDown(KeyCode.Backspace)) && WorldSaves.Exists(highlighted))
             confirmingDelete = highlighted;
     }
@@ -292,6 +344,8 @@ public class WorldMenu : MonoBehaviour
             titleStyle = new GUIStyle(GUI.skin.label) { fontSize = 40, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
             bigLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold };
         }
+
+        if (Tutorial.IsOpen) return;   // it draws itself, over everything
 
         if (!Playing)
             DrawMenu();
@@ -340,12 +394,18 @@ public class WorldMenu : MonoBehaviour
             if (i == highlighted) GUI.Box(row, "");
 
             GUI.Label(new Rect(x + 14, y + 10, 200, 26), "World " + (i + 1), bigLabelStyle);
-            GUI.Label(new Rect(x + 14, y + 38, 260, 24), slotInfo[i]);
+            if (choosingMode != i) GUI.Label(new Rect(x + 14, y + 38, 300, 24), slotInfo[i]);
 
             Rect firstButton = new Rect(x + width - 210, y + 20, 100, 32);
             Rect secondButton = new Rect(x + width - 104, y + 20, 90, 32);
 
-            if (confirmingDelete == i)
+            if (choosingMode == i)
+            {
+                GUI.Label(new Rect(x + 14, y + 38, 300, 24), "What kind of world?  (Esc: never mind)");
+                if (GUI.Button(new Rect(x + width - 250, y + 20, 116, 32), "Creative (C)")) StartNew(i, false);
+                if (GUI.Button(new Rect(x + width - 128, y + 20, 114, 32), "Survival (S)")) StartNew(i, true);
+            }
+            else if (confirmingDelete == i)
             {
                 GUI.Label(new Rect(x + width - 340, y + 26, 130, 24), "Delete for good?");
                 if (GUI.Button(firstButton, "Yes (Y)")) Delete(i);
@@ -362,9 +422,16 @@ public class WorldMenu : MonoBehaviour
         }
 
         y += 10;
+        if (GUI.Button(new Rect(x + width / 2f - 110f, y, 220f, 36f), "How to Play  (H)")) Tutorial.Open();
+        y += 46;
         GUI.Label(new Rect(x, y, width, 24), "Up / Down to choose,  Enter to play,  1-3 to jump straight in,  Delete to remove");
 
-        if (problem != "")
+        if (choosingMode >= 0)
+        {
+            GUI.Label(new Rect(x, y + 30, width, 24), "Creative: every block, as many as you like - just build!");
+            GUI.Label(new Rect(x, y + 52, width, 48), "Survival: start with nothing. Collect the blocks you break, craft the rest, and look after your hearts and food. Watch out for zombies, skeletons, spiders and slimes!");
+        }
+        else if (problem != "")
             GUI.Label(new Rect(x, y + 30, width, 48), problem);
     }
 
@@ -373,7 +440,7 @@ public class WorldMenu : MonoBehaviour
         DarkenScreen(0.4f);
 
         float width = Mathf.Min(420f, Screen.width - 32f);
-        Rect box = new Rect((Screen.width - width) / 2f, Screen.height / 2f - 80f, width, 160);
+        Rect box = new Rect((Screen.width - width) / 2f, Screen.height / 2f - 80f, width, 190);
         GUI.Box(box, "");
 
         string where = currentPlace == WorldSaves.MagicLand ? " (Magic Land)" : currentPlace == WorldSaves.Nether ? " (Nether)" : "";
@@ -381,6 +448,7 @@ public class WorldMenu : MonoBehaviour
         GUI.Label(new Rect(box.x + 20, box.y + 54, width - 40, 24), "Enter or click: keep playing");
         GUI.Label(new Rect(box.x + 20, box.y + 80, width - 40, 24), "M: save and go back to the world menu");
         GUI.Label(new Rect(box.x + 20, box.y + 116, width - 40, 24), "Your world also saves itself every minute.");
+        GUI.Label(new Rect(box.x + 20, box.y + 146, width - 40, 24), "Achievements: " + Achievements.Got + " of " + Achievements.Total + "     H: how to play");
     }
 
     static void DarkenScreen(float amount)

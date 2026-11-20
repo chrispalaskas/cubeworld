@@ -24,11 +24,12 @@ public partial class BlockInteractor
     {
         Vector3Int unused;
         return LookingAtBlock(out chest, out unused)
-            && BlockWorld.Instance.GetBlock(chest.x, chest.y, chest.z) == BlockWorld.Chest;
+            && BlockWorld.IsContainer(BlockWorld.Instance.GetBlock(chest.x, chest.y, chest.z));   // dispensers open like chests
     }
 
     void OpenChest(Vector3Int where)
     {
+        Structures.CheckTreasure(where);
         OpenInventory();
         chestOpen = true;
         openChestAt = where;
@@ -44,7 +45,7 @@ public partial class BlockInteractor
         // Close it - or if the chest has gone (TNT!), close it for you
         if (Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(KeyCode.Escape) ||
             Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Tab) ||
-            BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z) != BlockWorld.Chest)
+            !BlockWorld.IsContainer(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z)))
         {
             CloseInventory();
             return;
@@ -71,6 +72,22 @@ public partial class BlockInteractor
         BlockWorld.ChestContents inside = OpenChestContents();
         byte holding = selected;
 
+        if (holding == BlockWorld.Air)
+        {
+            ChestSays("Your hand is empty - pick something on the hotbar first.");
+            return;
+        }
+        if (Survival)
+        {
+            // Only what you've actually got (and your tools stay with you)
+            if (IsTool(holding))
+            {
+                ChestSays("Keep your " + ItemNames[holding] + " - you'll need it!");
+                return;
+            }
+            howMany = Mathf.Min(howMany, HowMany(holding));
+        }
+
         if (inside.items[space] != BlockWorld.Air && inside.items[space] != holding)
         {
             ChestSays("That space already has " + ItemNames[inside.items[space]] + " in it.");
@@ -82,8 +99,10 @@ public partial class BlockInteractor
             return;
         }
 
+        howMany = Mathf.Min(howMany, BlockWorld.ChestContents.MostInASpace - inside.counts[space]);
         inside.items[space] = holding;
-        inside.counts[space] = (byte)Mathf.Min(inside.counts[space] + howMany, BlockWorld.ChestContents.MostInASpace);
+        inside.counts[space] = (byte)(inside.counts[space] + howMany);
+        UseUp(holding, howMany);   // (survival only)
     }
 
     // Takes one out of a space, and puts that kind of block in your hand
@@ -95,6 +114,13 @@ public partial class BlockInteractor
 
         inside.counts[space]--;
         if (inside.counts[space] == 0) inside.items[space] = BlockWorld.Air;
+
+        if (Survival)
+        {
+            Give(item);
+            ChestSays("Took out 1 " + ItemNames[item] + " - you've got " + HowMany(item) + " now.");
+            return;
+        }
 
         // Treasure can hold things you haven't made yet - finding one counts!
         bool found = !HaveGot(item);
@@ -134,7 +160,10 @@ public partial class BlockInteractor
         BlockWorld.ChestContents inside = OpenChestContents();
 
         GUI.Box(new Rect(0, 0, width, height), "");
-        GUI.Label(new Rect(0, 8, width, 24), "Chest", centredLabel);
+        bool dispenser = BlockWorld.IsDispenser(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
+        bool fridge = BlockWorld.IsFridge(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
+        GUI.Label(new Rect(0, 8, width, 24), dispenser ? "Dispenser - press a button joined to it to shoot one out"
+                                           : fridge ? "Fridge - a cool place to keep your food" : "Chest", centredLabel);
         GUI.Label(new Rect(20, 32, width - 40, 24),
                   "Holding: " + ItemNames[selected] + "   (pick a different block with 1-9, 0, or by clicking the hotbar)");
 

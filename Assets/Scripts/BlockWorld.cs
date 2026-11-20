@@ -12,7 +12,7 @@ using UnityEngine.Rendering;
 //
 // A few blocks aren't simple cubes - stairs, doors, and lamps (which carry a
 // light) - so those each get their own little object instead.
-public class BlockWorld : MonoBehaviour
+public partial class BlockWorld : MonoBehaviour
 {
     public static BlockWorld Instance { get; private set; }
 
@@ -118,6 +118,96 @@ public class BlockWorld : MonoBehaviour
     public const byte FireVent    = 73;   // a crack in the ground that shoots out flames
     public const byte Fire        = 74;   // flickering flames - hot! You walk into them, not on them
 
+    // (75 is the fire villager egg.) Machines (see Machines.cs):
+    public const byte Button = 76;        // press it with E to send a pulse of power
+    public const byte Cable  = 77;        // carries power, and glows while it does
+    // A dispenser shoots out what's inside it when power reaches it. It has
+    // four numbers, one for each way it can face - like stairs.
+    public const byte DispenserNorth = 78;   // shoots towards +Z
+    public const byte DispenserEast  = 79;   // +X
+    public const byte DispenserSouth = 80;   // -Z
+    public const byte DispenserWest  = 81;   // -X
+
+    public static bool IsDispenser(byte type) { return type >= DispenserNorth && type <= DispenserWest; }
+
+    // Which way a dispenser shoots
+    public static Vector3Int DispenserFacing(byte type)
+    {
+        switch (type)
+        {
+            case DispenserEast:  return Vector3Int.right;
+            case DispenserSouth: return new Vector3Int(0, 0, -1);
+            case DispenserWest:  return Vector3Int.left;
+            default:             return new Vector3Int(0, 0, 1);
+        }
+    }
+
+    // Blocks with things kept inside them, like a chest
+    public static bool IsContainer(byte type) { return type == Chest || IsDispenser(type) || IsFridge(type); }
+
+    // More machines
+    public const byte PressurePlate = 82;   // step on it to send power
+    public const byte Timer         = 83;   // sends power all by itself, every couple of seconds
+    public const byte SignalLight   = 84;   // glows when power reaches it
+    public const byte NoteBlock     = 85;   // plays a note when power reaches it (E changes the note)
+    // A piston pushes the blocks in front of it when it's powered. Four
+    // numbers again, one for each way it can face.
+    public const byte PistonNorth   = 86;
+    public const byte PistonEast    = 87;
+    public const byte PistonSouth   = 88;
+    public const byte PistonWest    = 89;
+    // A conveyor belt carries you along the way its arrow points
+    public const byte ConveyorNorth = 90;
+    public const byte ConveyorEast  = 91;
+    public const byte ConveyorSouth = 92;
+    public const byte ConveyorWest  = 93;
+
+    // (94 to 96 are food, which isn't a block)
+
+    // Very rare: only found on the Star Shrine, at the top of the highest
+    // mountain. It glows, shines a beam of starlight into the sky, heals you
+    // in survival, and zombies won't go near it. See StarCrystal.cs.
+    public const byte StarCrystal   = 97;
+
+    public static bool IsPiston(byte type)   { return type >= PistonNorth && type <= PistonWest; }
+    public static bool IsConveyor(byte type) { return type >= ConveyorNorth && type <= ConveyorWest; }
+
+    // North, east, south or west - for anything that comes in four directions
+    static Vector3Int Direction(int which)
+    {
+        switch (which)
+        {
+            case 1:  return Vector3Int.right;
+            case 2:  return new Vector3Int(0, 0, -1);
+            case 3:  return Vector3Int.left;
+            default: return new Vector3Int(0, 0, 1);
+        }
+    }
+
+    public static Vector3Int PistonFacing(byte type)       { return Direction(type - PistonNorth); }
+    public static Vector3Int ConveyorDirection(byte type)  { return Direction(type - ConveyorNorth); }
+
+    // Every timer in the world, so they can tick without searching for them
+    private readonly HashSet<Vector3Int> timers = new HashSet<Vector3Int>();
+    public IEnumerable<Vector3Int> Timers { get { return timers; } }
+    private readonly HashSet<Vector3Int> starCrystals = new HashSet<Vector3Int>();
+    public IEnumerable<Vector3Int> StarCrystals { get { return starCrystals; } }
+    private Material starBeam;
+
+    // Which note each note block is set to (0 is the lowest)
+    private readonly Dictionary<Vector3Int, byte> noteTunes = new Dictionary<Vector3Int, byte>();
+
+    public byte NoteAt(Vector3Int cell)
+    {
+        byte note;
+        return noteTunes.TryGetValue(cell, out note) ? note : (byte)0;
+    }
+
+    public void SetNote(Vector3Int cell, byte note)
+    {
+        noteTunes[cell] = note;
+    }
+
     // What's inside one chest: 27 spaces, each holding up to 64 of one thing
     public class ChestContents
     {
@@ -185,6 +275,13 @@ public class BlockWorld : MonoBehaviour
         blocks = new byte[SizeX, SizeY, SizeZ];
         groundHeight = new int[SizeX, SizeZ];
         chests.Clear();
+        timers.Clear();
+        starCrystals.Clear();
+        crops.Clear();
+        furnaces.Clear();
+        spawners.Clear();
+        signTexts.Clear();
+        noteTunes.Clear();
 
         int chunksX = (SizeX + ChunkSize - 1) / ChunkSize;
         int chunksZ = (SizeZ + ChunkSize - 1) / ChunkSize;
@@ -208,10 +305,14 @@ public class BlockWorld : MonoBehaviour
         MakeEmptyWorld(NewSizeX, NewSizeY, NewSizeZ);
 
         GenerateHills();
+        MakeLands();        // deserts, jungles and snowy lands (Lands.cs)
         CarveCaves();
+        PoolLava();
+        BuryTreasure();
         RegrowGrass();
         FillSea();
-        PlantTrees();
+        FreezeSea();
+        PlantLands();
         BuildAllCubes();
     }
 
@@ -219,25 +320,27 @@ public class BlockWorld : MonoBehaviour
     {
         // ONE material per block type, shared by every cube of that type.
         // Giving each cube its own material would bring the game to a crawl.
-        materials = new Material[75];
-        materials[Grass]  = MakeMaterial(new Color(0.35f, 0.70f, 0.25f));
-        materials[Dirt]   = MakeMaterial(new Color(0.50f, 0.35f, 0.20f));
-        materials[Stone]  = MakeMaterial(new Color(0.55f, 0.55f, 0.58f));
-        materials[Wood]   = MakeMaterial(new Color(0.45f, 0.32f, 0.18f));
-        materials[Sand]   = MakeMaterial(new Color(0.86f, 0.80f, 0.55f));
-        materials[Leaves] = MakeMaterial(new Color(0.20f, 0.50f, 0.15f));
+        materials = new Material[256];
+        // Natural blocks each get their own pattern, plus a faint darker edge
+        // so you can see where one block stops and the next one starts
+        materials[Grass]  = MakePixelMaterial(GrassPixel, true);
+        materials[Dirt]   = MakePixelMaterial(DirtPixel, true);
+        materials[Stone]  = MakePixelMaterial(StonePixel, true);
+        materials[Wood]   = MakePixelMaterial(BarkPixel, true);
+        materials[Sand]   = MakePixelMaterial(SandPixel, true);
+        materials[Leaves] = MakePixelMaterial(LeafPixel, true);
         materials[Water]  = MakeSeeThroughMaterial(new Color(0.20f, 0.45f, 0.85f, 0.6f));
         materials[Tnt]    = MakeTntMaterial(new Color(0.80f, 0.15f, 0.10f), Color.white);
 
         materials[Glass]       = MakeGlassMaterial();
-        materials[Diamond]     = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(0.80f, 1.00f, 1.00f) : new Color(0.35f, 0.85f, 0.85f));
-        materials[Gold]        = MakePixelMaterial((x, y) => Speckle(x, y, 5) ? new Color(1.00f, 0.95f, 0.55f) : new Color(0.95f, 0.75f, 0.15f));
-        materials[Iron]        = MakePixelMaterial((x, y) => Speckle(x, y, 6) ? new Color(0.95f, 0.95f, 0.95f) : new Color(0.78f, 0.78f, 0.80f));
+        materials[Diamond]     = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(0.80f, 1.00f, 1.00f) : new Color(0.35f, 0.85f, 0.85f), true);
+        materials[Gold]        = MakePixelMaterial((x, y) => Speckle(x, y, 5) ? new Color(1.00f, 0.95f, 0.55f) : new Color(0.95f, 0.75f, 0.15f), true);
+        materials[Iron]        = MakePixelMaterial((x, y) => Speckle(x, y, 6) ? new Color(0.95f, 0.95f, 0.95f) : new Color(0.78f, 0.78f, 0.80f), true);
         materials[Brick]       = MakePixelMaterial(BrickPixel);
-        materials[Cobblestone] = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.38f, 0.38f, 0.40f) : new Color(0.58f, 0.58f, 0.60f));
+        materials[Cobblestone] = MakePixelMaterial(CobblePixel, true);
         materials[Planks]      = MakePixelMaterial(PlankPixel);
-        materials[Snow]        = MakePixelMaterial((x, y) => Speckle(x, y, 7) ? new Color(0.85f, 0.90f, 0.95f) : new Color(0.97f, 0.98f, 1.00f));
-        materials[Obsidian]    = MakePixelMaterial((x, y) => Speckle(x, y, 5) ? new Color(0.32f, 0.20f, 0.48f) : new Color(0.10f, 0.07f, 0.16f));
+        materials[Snow]        = MakePixelMaterial((x, y) => Speckle(x, y, 7) ? new Color(0.85f, 0.90f, 0.95f) : new Color(0.97f, 0.98f, 1.00f), true);
+        materials[Obsidian]    = MakePixelMaterial((x, y) => Speckle(x, y, 5) ? new Color(0.32f, 0.20f, 0.48f) : new Color(0.10f, 0.07f, 0.16f), true);
 
         materials[CraftingTable] = MakePixelMaterial(CraftingTablePixel);
         materials[Lamp]          = MakeLampMaterial();
@@ -258,9 +361,9 @@ public class BlockWorld : MonoBehaviour
 
         materials[Portal]      = MakeSwirlMaterial(new Color(0.45f, 0.10f, 0.75f), new Color(0.85f, 0.55f, 1.00f));
         materials[MagicPortal] = MakeSwirlMaterial(new Color(0.95f, 0.30f, 0.70f), new Color(0.40f, 0.95f, 1.00f));
-        materials[MagicGrass]  = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(1.00f, 0.70f, 0.95f) : new Color(0.75f, 0.40f, 0.85f));
+        materials[MagicGrass]  = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(1.00f, 0.70f, 0.95f) : new Color(0.75f, 0.40f, 0.85f), true);
         materials[Crystal]     = MakeGlowingMaterial((x, y) => (x + y) % 4 == 0 ? new Color(0.85f, 1.00f, 1.00f) : new Color(0.30f, 0.85f, 0.95f));
-        materials[Cloud]       = MakePixelMaterial((x, y) => Speckle(x, y, 9) ? new Color(0.90f, 0.92f, 0.98f) : Color.white);
+        materials[Cloud]       = MakePixelMaterial((x, y) => Speckle(x, y, 9) ? new Color(0.90f, 0.92f, 0.98f) : Color.white, true);
         materials[Chest]       = MakePixelMaterial(ChestPixel);
         materials[MushroomStem] = MakePixelMaterial((x, y) => x % 3 == 0 ? new Color(0.88f, 0.84f, 0.76f) : new Color(0.96f, 0.93f, 0.86f));
         materials[MushroomCap]  = MakePixelMaterial((x, y) =>
@@ -268,8 +371,8 @@ public class BlockWorld : MonoBehaviour
                 ? Color.white : new Color(0.88f, 0.15f, 0.20f));   // red with white spots
 
         materials[FirePortal]  = MakeSwirlMaterial(new Color(0.70f, 0.10f, 0.02f), new Color(1.00f, 0.75f, 0.15f));
-        materials[EmberRock]   = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(0.30f, 0.08f, 0.06f) : new Color(0.48f, 0.14f, 0.10f));
-        materials[Ash]         = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.35f, 0.33f, 0.33f) : new Color(0.50f, 0.48f, 0.47f));
+        materials[EmberRock]   = MakePixelMaterial((x, y) => Speckle(x, y, 4) ? new Color(0.30f, 0.08f, 0.06f) : new Color(0.48f, 0.14f, 0.10f), true);
+        materials[Ash]         = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.35f, 0.33f, 0.33f) : new Color(0.50f, 0.48f, 0.47f), true);
         materials[Lava]        = MakeSwirlMaterial(new Color(0.95f, 0.30f, 0.02f), new Color(1.00f, 0.85f, 0.20f));
         materials[FireCrystal] = MakeGlowingMaterial((x, y) => (x + y) % 3 == 0 ? new Color(1.00f, 0.95f, 0.60f) : new Color(1.00f, 0.65f, 0.15f));
         materials[FireVent]    = MakeGlowingMaterial((x, y) =>
@@ -283,6 +386,45 @@ public class BlockWorld : MonoBehaviour
             MakeGlowingMaterial((x, y) => new Color(1.00f, 0.85f, 0.25f)),
         };
         materials[Fire] = flameMaterials[1];
+
+        materials[Button] = MakePixelMaterial((x, y) =>
+        {
+            float d = Vector2.Distance(new Vector2(x, y), new Vector2(3.5f, 3.5f));
+            if (d < 2.2f) return d < 1.2f ? new Color(1.00f, 0.35f, 0.30f) : new Color(0.80f, 0.12f, 0.10f);   // a big red button
+            return Speckle(x, y, 5) ? new Color(0.45f, 0.45f, 0.48f) : new Color(0.60f, 0.60f, 0.62f);        // on a stone block
+        });
+        cableOff = MakeMaterial(new Color(0.45f, 0.08f, 0.06f));
+        cableOn = MakeGlowingMaterial((x, y) => new Color(1.00f, 0.15f, 0.10f));
+        materials[Cable] = cableOn;
+        Material dispenser = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.38f, 0.38f, 0.40f) : new Color(0.55f, 0.55f, 0.57f));
+        for (byte d = DispenserNorth; d <= DispenserWest; d++)
+            materials[d] = dispenser;
+        dispenserMouth = MakeMaterial(new Color(0.08f, 0.08f, 0.08f));
+
+        materials[PressurePlate] = MakePixelMaterial((x, y) => Speckle(x, y, 6) ? new Color(0.50f, 0.50f, 0.52f) : new Color(0.68f, 0.68f, 0.70f));
+        materials[Timer] = MakePixelMaterial(TimerPixel);
+        signalOff = MakePixelMaterial((x, y) => x == 0 || y == 0 || x == 7 || y == 7 ? new Color(0.35f, 0.30f, 0.20f) : new Color(0.55f, 0.50f, 0.30f));
+        signalOn = MakeGlowingMaterial((x, y) => x == 0 || y == 0 || x == 7 || y == 7 ? new Color(0.80f, 0.70f, 0.30f) : new Color(1.00f, 0.95f, 0.55f));
+        materials[SignalLight] = signalOff;
+        materials[NoteBlock] = MakePixelMaterial(NotePixel);
+        Material pistonBody = MakePixelMaterial((x, y) => Speckle(x, y, 3) ? new Color(0.36f, 0.36f, 0.38f) : new Color(0.52f, 0.52f, 0.54f));
+        for (byte p = PistonNorth; p <= PistonWest; p++) materials[p] = pistonBody;
+        pistonHead = materials[Planks];
+        for (int d = 0; d < 4; d++)
+        {
+            int direction = d;
+            materials[ConveyorNorth + d] = MakePixelMaterial((x, y) => ConveyorPixel(x, y, direction));
+        }
+
+        // Pale gold and sky blue, with twinkling white points
+        materials[StarCrystal] = MakeGlowingMaterial((x, y) =>
+        {
+            bool sparkle = (x == 2 && y == 5) || (x == 5 && y == 2) || (x == 4 && y == 6) || (x == 1 && y == 1);
+            if (sparkle) return Color.white;
+            bool middle = Mathf.Abs(x - 3.5f) + Mathf.Abs(y - 3.5f) < 3f;
+            return middle ? new Color(1.00f, 0.92f, 0.55f) : new Color(0.55f, 0.80f, 1.00f);
+        });
+        starBeam = MakeSeeThroughMaterial(new Color(0.75f, 0.90f, 1.00f, 0.28f));
 
         Color[] rainbow =
         {
@@ -298,6 +440,9 @@ public class BlockWorld : MonoBehaviour
 
         TntFlashMaterial  = MakeMaterial(Color.white);
         ExplosionMaterial = MakeSeeThroughMaterial(new Color(1f, 0.55f, 0.1f, 0.7f));
+        CreateFurnitureMaterials();   // (Furniture.cs)
+        CreateMoreMaterials();        // (MoreBlocks.cs)
+        CreateBuildingMaterials();    // (Building.cs)
 
         // Borrow Unity's built-in cube shape so every block can share it
         GameObject temp = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -314,6 +459,15 @@ public class BlockWorld : MonoBehaviour
         Material mat = new Material(sh);
         mat.color = color;
         mat.enableInstancing = true;   // lets Unity draw lots of cubes in one go
+        return mat;
+    }
+
+    // A see-through material with a picture on it (for the cracks that
+    // appear on blocks as you dig them)
+    public static Material MakeSeeThroughTexture(Texture2D picture)
+    {
+        Material mat = MakeSeeThroughMaterial(Color.white);
+        mat.mainTexture = picture;
         return mat;
     }
 
@@ -350,14 +504,21 @@ public class BlockWorld : MonoBehaviour
     }
 
     // An 8x8 texture where we choose the colour of every pixel
-    static Material MakePixelMaterial(System.Func<int, int, Color> pixel)
+    // ("edged" darkens the outside ring of pixels a little, so a wall of the
+    // same block shows a faint grid)
+    static Material MakePixelMaterial(System.Func<int, int, Color> pixel, bool edged = false)
     {
         Texture2D texture = new Texture2D(8, 8);
         texture.filterMode = FilterMode.Point;   // keep the pixels crisp and blocky
 
         for (int x = 0; x < 8; x++)
             for (int y = 0; y < 8; y++)
-                texture.SetPixel(x, y, pixel(x, y));
+            {
+                Color colour = pixel(x, y);
+                if (edged && (x == 0 || y == 0 || x == 7 || y == 7))
+                    colour = new Color(colour.r * 0.82f, colour.g * 0.82f, colour.b * 0.82f, colour.a);
+                texture.SetPixel(x, y, colour);
+            }
         texture.Apply();
 
         Material mat = MakeMaterial(Color.white);
@@ -367,6 +528,79 @@ public class BlockWorld : MonoBehaviour
 
     // A scattering of pixels that looks random but is the same every time.
     // Bigger "rarity" means fewer of them.
+    // A jumbled-up number from 0 to 1 for each pixel - the same every time,
+    // so patterns look random but never change
+    static float Jumble(int x, int y, int seed)
+    {
+        unchecked
+        {
+            int h = x * 374761393 + y * 668265263 + seed * 1442695041;
+            h = (h ^ (h >> 13)) * 1274126177;
+            return ((h ^ (h >> 16)) & 0xffff) / 65535f;
+        }
+    }
+
+    // Grass: green, with lighter and darker blades
+    static Color GrassPixel(int x, int y)
+    {
+        float n = Jumble(x, y, 1);
+        if (n < 0.18f) return new Color(0.24f, 0.55f, 0.17f);
+        if (n > 0.80f) return new Color(0.50f, 0.84f, 0.32f);
+        return new Color(0.36f, 0.70f, 0.24f);
+    }
+
+    // Dirt: brown, with little pebbles
+    static Color DirtPixel(int x, int y)
+    {
+        float n = Jumble(x, y, 2);
+        if (n < 0.15f) return new Color(0.36f, 0.24f, 0.13f);
+        if (n > 0.88f) return new Color(0.62f, 0.48f, 0.32f);
+        return new Color(0.50f, 0.35f, 0.20f);
+    }
+
+    // Stone: smooth grey, with a couple of dark cracks
+    static Color StonePixel(int x, int y)
+    {
+        bool crack = (y == 5 && x >= 1 && x <= 3) || (y == 4 && x == 4) || (y == 2 && x >= 5 && x <= 6) || (y == 1 && x == 3);
+        if (crack) return new Color(0.40f, 0.40f, 0.43f);
+        return Jumble(x, y, 3) > 0.85f ? new Color(0.62f, 0.62f, 0.65f) : new Color(0.55f, 0.55f, 0.58f);
+    }
+
+    // Cobblestone: lumpy stones with dark gaps between them
+    static Color CobblePixel(int x, int y)
+    {
+        int shift = (y / 3) % 2 == 0 ? 0 : 2;
+        bool gap = y % 3 == 0 || (x + shift) % 4 == 0;
+        if (gap) return new Color(0.30f, 0.30f, 0.32f);
+        return Jumble(x, y, 4) > 0.6f ? new Color(0.66f, 0.66f, 0.68f) : new Color(0.52f, 0.52f, 0.55f);
+    }
+
+    // Tree bark: up-and-down stripes of dark and light brown
+    static Color BarkPixel(int x, int y)
+    {
+        bool groove = x == 2 || x == 5 || (x == 6 && y % 3 == 0);
+        if (groove) return new Color(0.30f, 0.20f, 0.10f);
+        return Jumble(x, y, 5) > 0.7f ? new Color(0.55f, 0.40f, 0.23f) : new Color(0.45f, 0.32f, 0.18f);
+    }
+
+    // Sand: pale yellow, with tiny grains
+    static Color SandPixel(int x, int y)
+    {
+        float n = Jumble(x, y, 6);
+        if (n < 0.12f) return new Color(0.76f, 0.69f, 0.45f);
+        if (n > 0.90f) return new Color(0.95f, 0.90f, 0.70f);
+        return new Color(0.86f, 0.80f, 0.55f);
+    }
+
+    // Leaves: dark green and bunched up, with gaps and bright leaf tips
+    static Color LeafPixel(int x, int y)
+    {
+        float n = Jumble(x, y, 7);
+        if (n < 0.20f) return new Color(0.08f, 0.28f, 0.07f);   // a gap between leaves
+        if (n > 0.78f) return new Color(0.30f, 0.62f, 0.20f);
+        return new Color(0.17f, 0.45f, 0.13f);
+    }
+
     static bool Speckle(int x, int y, int rarity)
     {
         return ((x * 7 + y * 13 + x * y) % rarity) == 0;
@@ -463,6 +697,44 @@ public class BlockWorld : MonoBehaviour
     }
 
     private Material[] flameMaterials;
+    private Material cableOff, cableOn, dispenserMouth, signalOff, signalOn, pistonHead;
+
+    // A clock face on a stone block
+    static Color TimerPixel(int x, int y)
+    {
+        float d = Vector2.Distance(new Vector2(x, y), new Vector2(3.5f, 3.5f));
+        if (d < 3.2f)
+        {
+            bool hand = (x == 3 || x == 4) && y >= 3 && y <= 6 || (y == 3 || y == 4) && x >= 4 && x <= 6;
+            if (hand) return new Color(0.10f, 0.10f, 0.10f);
+            return d > 2.4f ? new Color(0.85f, 0.65f, 0.20f) : new Color(0.95f, 0.95f, 0.90f);
+        }
+        return new Color(0.55f, 0.55f, 0.57f);
+    }
+
+    // A musical note on dark wood
+    static Color NotePixel(int x, int y)
+    {
+        bool note = (x == 5 && y >= 2 && y <= 6) || (y == 6 && x >= 5 && x <= 6) ||
+                    (x >= 3 && x <= 5 && y >= 1 && y <= 2);
+        if (note) return new Color(0.95f, 0.90f, 0.40f);
+        return y % 3 == 0 ? new Color(0.30f, 0.18f, 0.10f) : new Color(0.38f, 0.24f, 0.13f);
+    }
+
+    // A dark belt with a yellow arrow, pointing whichever way (0 north, 1 east, 2 south, 3 west)
+    static Color ConveyorPixel(int x, int y, int direction)
+    {
+        // Turn the pixel round so we can always draw an arrow pointing "up"
+        int ax = x, ay = y;
+        if (direction == 1) { ax = y; ay = x; }
+        if (direction == 2) { ax = 7 - x; ay = 7 - y; }
+        if (direction == 3) { ax = y; ay = 7 - x; }
+
+        bool stem = ax >= 3 && ax <= 4 && ay <= 3;
+        bool head = ay >= 3 && Mathf.Abs(ax - 3.5f) <= 7 - ay;
+        if (stem || head) return new Color(0.95f, 0.80f, 0.15f);
+        return ay % 2 == 0 ? new Color(0.18f, 0.18f, 0.20f) : new Color(0.24f, 0.24f, 0.26f);
+    }
 
     // A pixel texture that shines by itself
     static Material MakeGlowingMaterial(System.Func<int, int, Color> pixel)
@@ -486,11 +758,20 @@ public class BlockWorld : MonoBehaviour
 
     void Update()
     {
+        TickMoreBlocks();   // falling sand, growing wheat, furnaces (MoreBlocks.cs)
+
         Vector2 drift = new Vector2(Time.time * 0.25f, Time.time * 0.15f);
         materials[Portal].mainTextureOffset = drift;
         materials[MagicPortal].mainTextureOffset = -drift;
         materials[FirePortal].mainTextureOffset = new Vector2(drift.y, -drift.x);
         materials[Lava].mainTextureOffset = drift * 0.2f;   // slowly churning
+
+        // Conveyor belts roll along the way their arrows point
+        float roll = Time.time * 0.8f;
+        materials[ConveyorNorth].mainTextureOffset = new Vector2(0f, -roll);
+        materials[ConveyorEast].mainTextureOffset = new Vector2(-roll, 0f);
+        materials[ConveyorSouth].mainTextureOffset = new Vector2(0f, roll);
+        materials[ConveyorWest].mainTextureOffset = new Vector2(roll, 0f);
     }
 
     // Nearly clear in the middle, with a pale frame and a glint across it
@@ -1143,6 +1424,18 @@ public class BlockWorld : MonoBehaviour
             writer.Write(chest.Value.items);
             writer.Write(chest.Value.counts);
         }
+
+        // Which note each note block plays
+        writer.Write(noteTunes.Count);
+        foreach (KeyValuePair<Vector3Int, byte> tune in noteTunes)
+        {
+            writer.Write(tune.Key.x);
+            writer.Write(tune.Key.y);
+            writer.Write(tune.Key.z);
+            writer.Write(tune.Value);
+        }
+
+        WriteSigns(writer);   // (Building.cs)
     }
 
     public bool ReadFrom(BinaryReader reader)
@@ -1180,6 +1473,18 @@ public class BlockWorld : MonoBehaviour
                 reader.Read(inside.counts, 0, ChestContents.Spaces);
             }
         }
+
+        // ...and saves from before note blocks stop here
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            int tuneCount = reader.ReadInt32();
+            for (int t = 0; t < tuneCount; t++)
+                noteTunes[new Vector3Int(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32())] = reader.ReadByte();
+        }
+
+        // Saves from before signs existed stop here
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+            ReadSigns(reader);
 
         BuildAllCubes();
         return true;
@@ -1268,11 +1573,21 @@ public class BlockWorld : MonoBehaviour
     {
         if (!InBounds(x, y, z)) return;
 
-        // A chest that's broken or blown up loses everything inside it
-        if (blocks[x, y, z] == Chest && type != Chest)
-            chests.Remove(new Vector3Int(x, y, z));
+        // A chest or dispenser that's broken or blown up loses everything inside it
+        Vector3Int here = new Vector3Int(x, y, z);
+        if ((IsContainer(blocks[x, y, z]) || IsFurnace(blocks[x, y, z])) && type != blocks[x, y, z])
+            chests.Remove(here);   // (furnaces keep what they're cooking in the same place)
+        if (blocks[x, y, z] == NoteBlock && type != NoteBlock) noteTunes.Remove(here);
+        if (type == Timer) timers.Add(here);
+        else timers.Remove(here);
+        if (type == StarCrystal) starCrystals.Add(here);
+        else starCrystals.Remove(here);
+        TrackCrop(here, type);
+        TrackFurnace(here, type);
+        TrackBuilding(here, type);
 
         blocks[x, y, z] = type;
+        CheckForFalling(x, y, z);
 
         // Its chunk needs redrawing - and if it's on the edge of the chunk,
         // so does the one next door, whose faces it might hide or uncover
@@ -1374,20 +1689,21 @@ public class BlockWorld : MonoBehaviour
     // so a block next to any of them is on show
     static bool SeeThrough(byte type)
     {
-        return type == Air || type == Water || type == Glass || type == Fire || Shaped(type);
+        return type == Air || type == Water || type == Glass || type == Fire || type == Cable || type == PressurePlate || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type);
     }
 
     // Water is drawn where it touches air, glass (so you can build a fish
     // tank), or the gaps around stairs and doors
     static bool ShowsWater(byte type)
     {
-        return type == Air || type == Glass || type == Fire || Shaped(type);
+        return type == Air || type == Glass || type == Fire || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type);
     }
 
     // Stairs, doors and lamps are drawn one by one, not as part of a chunk
     static bool Special(byte type)
     {
-        return Shaped(type) || type == Lamp || type == Fire;
+        return Shaped(type) || type == Lamp || type == Fire || type == Cable || IsDispenser(type)
+            || type == PressurePlate || type == SignalLight || IsPiston(type) || type == StarCrystal || IsFurniture(type) || IsWheat(type) || IsModel(type);
     }
 
     // A stairs, door or lamp only needs drawing if at least one side is exposed
@@ -1415,8 +1731,17 @@ public class BlockWorld : MonoBehaviour
         for (int x = 0; x < SizeX; x++)
             for (int y = 0; y < SizeY; y++)
                 for (int z = 0; z < SizeZ; z++)
+                {
                     if (Special(blocks[x, y, z]))
                         RefreshSpecial(x, y, z);
+                    if (blocks[x, y, z] == Timer)
+                        timers.Add(new Vector3Int(x, y, z));
+                    if (blocks[x, y, z] == StarCrystal)
+                        starCrystals.Add(new Vector3Int(x, y, z));
+                    TrackCrop(new Vector3Int(x, y, z), blocks[x, y, z]);
+                    TrackFurnace(new Vector3Int(x, y, z), blocks[x, y, z]);
+                    if (blocks[x, y, z] == Spawner) spawners.Add(new Vector3Int(x, y, z));
+                }
     }
 
     // --- Stairs, doors and lamps ---
@@ -1433,7 +1758,9 @@ public class BlockWorld : MonoBehaviour
         bool have = specials.TryGetValue(cell, out existing);
 
         // Gone, hidden, or turned into something else (like a door opening)?
-        if (have && (!wanted || specialBuiltAs[cell] != type))
+        // (Cable is always rebuilt, because the things next to it may have
+        // changed, and it reaches out to join up with them)
+        if (have && (!wanted || specialBuiltAs[cell] != type || type == Cable || type == Fence))
         {
             Destroy(existing);
             specials.Remove(cell);
@@ -1455,6 +1782,24 @@ public class BlockWorld : MonoBehaviour
         cube.transform.SetParent(transform, false);
         cube.transform.localPosition = new Vector3(x, y, z);
 
+        if (IsFurniture(type))
+        {
+            BuildFurniture(cube, type);
+            return cube;
+        }
+
+        if (IsWheat(type))
+        {
+            BuildWheat(cube, type);
+            return cube;
+        }
+
+        if (IsModel(type))
+        {
+            BuildModel(cube, x, y, z, type);
+            return cube;
+        }
+
         if (Shaped(type))
         {
             // One small box for each piece, with something solid to bump
@@ -1472,6 +1817,90 @@ public class BlockWorld : MonoBehaviour
                 solid.center = piece.center;
                 solid.size = piece.size;
             }
+            return cube;
+        }
+
+        // Cable: a thin strip lying on the ground, with arms reaching out to
+        // join up with any cable, button or machine next to it. Nothing solid -
+        // you walk right over it.
+        if (type == Cable)
+        {
+            Material look = cableOff;
+            AddSpecialPiece(cube, new Vector3(0f, -0.45f, 0f), new Vector3(0.22f, 0.08f, 0.22f), look);
+            foreach (Vector3Int side in new[] { Vector3Int.right, Vector3Int.left, new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1) })
+            {
+                if (!JoinsCable(GetBlock(x + side.x, y, z + side.z))) continue;
+                Vector3 arm = new Vector3(side.x, 0f, side.z);
+                AddSpecialPiece(cube, arm * 0.27f + Vector3.up * -0.45f,
+                                side.x != 0 ? new Vector3(0.32f, 0.07f, 0.12f) : new Vector3(0.12f, 0.07f, 0.32f), look);
+            }
+            if (JoinsCable(GetBlock(x, y + 1, z)))   // a post going up, if there's more cable above
+                AddSpecialPiece(cube, new Vector3(0f, 0.05f, 0f), new Vector3(0.12f, 1.0f, 0.12f), look);
+            return cube;
+        }
+
+        // A pressure plate: a thin stone slab on the floor. Nothing solid - you
+        // walk onto it, and it sinks down a little while something's standing on it.
+        if (type == PressurePlate)
+        {
+            AddSpecialPiece(cube, new Vector3(0f, -0.47f, 0f), new Vector3(0.8f, 0.06f, 0.8f), materials[PressurePlate]);
+            return cube;
+        }
+
+        // A signal light: a glass-and-gold block that glows when powered
+        if (type == SignalLight)
+        {
+            cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+            cube.AddComponent<MeshRenderer>().sharedMaterial = signalOff;
+            cube.AddComponent<BoxCollider>();
+            return cube;
+        }
+
+        // The Star Crystal: a glowing block, a bright light, and a beam of
+        // starlight going right up into the sky (so you can always find it)
+        if (type == StarCrystal)
+        {
+            cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+            cube.AddComponent<MeshRenderer>().sharedMaterial = materials[StarCrystal];
+            cube.AddComponent<BoxCollider>();
+
+            AddSpecialPiece(cube, new Vector3(0f, 0.5f + 100f, 0f), new Vector3(0.4f, 200f, 0.4f), starBeam);
+
+            Light starlight = cube.AddComponent<Light>();
+            starlight.type = LightType.Point;
+            starlight.color = new Color(0.75f, 0.90f, 1.00f);
+            starlight.range = 12f;
+            starlight.intensity = 2.5f;
+            starlight.shadows = LightShadows.None;
+
+            cube.AddComponent<StarTwinkle>();
+            return cube;
+        }
+
+        // A piston: a stone block with a wooden pushing plate on the front
+        if (IsPiston(type))
+        {
+            cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+            cube.AddComponent<MeshRenderer>().sharedMaterial = materials[type];
+            cube.AddComponent<BoxCollider>();
+
+            Vector3 front = PistonFacing(type);
+            Vector3 plate = front.x != 0 ? new Vector3(0.06f, 0.96f, 0.96f) : new Vector3(0.96f, 0.96f, 0.06f);
+            AddSpecialPiece(cube, front * 0.5f, plate, pistonHead);
+            return cube;
+        }
+
+        // A dispenser: a stone block with a dark hole on the front, which is
+        // where things come shooting out
+        if (IsDispenser(type))
+        {
+            cube.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+            cube.AddComponent<MeshRenderer>().sharedMaterial = materials[type];
+            cube.AddComponent<BoxCollider>();
+
+            Vector3 front = DispenserFacing(type);
+            Vector3 mouthSize = front.x != 0 ? new Vector3(0.02f, 0.45f, 0.45f) : new Vector3(0.45f, 0.45f, 0.02f);
+            AddSpecialPiece(cube, front * 0.505f, mouthSize, dispenserMouth);
             return cube;
         }
 
@@ -1514,6 +1943,52 @@ public class BlockWorld : MonoBehaviour
         return cube;
     }
 
+    void AddSpecialPiece(GameObject owner, Vector3 position, Vector3 size, Material look)
+    {
+        GameObject piece = new GameObject("Piece");
+        piece.transform.SetParent(owner.transform, false);
+        piece.transform.localPosition = position;
+        piece.transform.localScale = size;
+        piece.AddComponent<MeshFilter>().sharedMesh = cubeMesh;
+        MeshRenderer renderer = piece.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = look;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+    }
+
+    // What a cable reaches out to join up with
+    public static bool JoinsCable(byte type)
+    {
+        return type == Cable || type == Button || IsDispenser(type) || type == Tnt || type == MegaTnt || IsDoor(type)
+            || type == PressurePlate || type == Timer || type == SignalLight || type == NoteBlock || IsPiston(type);
+    }
+
+    // Lights a signal light up, or back down
+    public void SetSignalLight(Vector3Int cell, bool on)
+    {
+        GameObject light;
+        if (!specials.TryGetValue(cell, out light) || light == null) return;
+        light.GetComponent<MeshRenderer>().sharedMaterial = on ? signalOn : signalOff;
+    }
+
+    // A pressure plate sinks down while something's standing on it
+    public void SetPlatePressed(Vector3Int cell, bool pressed)
+    {
+        GameObject plate;
+        if (!specials.TryGetValue(cell, out plate) || plate == null || plate.transform.childCount == 0) return;
+        Transform slab = plate.transform.GetChild(0);
+        slab.localPosition = new Vector3(0f, pressed ? -0.485f : -0.47f, 0f);
+        slab.localScale = new Vector3(0.8f, pressed ? 0.03f : 0.06f, 0.8f);
+    }
+
+    // Lights a stretch of cable up (or back down) as power runs along it
+    public void SetCablePowered(Vector3Int cell, bool on)
+    {
+        GameObject cable;
+        if (!specials.TryGetValue(cell, out cable) || cable == null) return;
+        foreach (MeshRenderer piece in cable.GetComponentsInChildren<MeshRenderer>())
+            piece.sharedMaterial = on ? cableOn : cableOff;
+    }
+
     // --- Chunks ---
 
     // The things a chunk is drawn with. Water and glass go in their own
@@ -1529,7 +2004,7 @@ public class BlockWorld : MonoBehaviour
     static bool FaceShows(byte type, byte neighbour)
     {
         if (type == Water) return ShowsWater(neighbour);
-        if (type == Glass) return neighbour == Air || neighbour == Water || Shaped(neighbour);   // no faces between panes
+        if (type == Glass) return neighbour == Air || neighbour == Water || Shaped(neighbour) || IsFurniture(neighbour) || IsModel(neighbour);   // no faces between panes
         return SeeThrough(neighbour);
     }
 
@@ -1663,7 +2138,7 @@ public class BlockWorld : MonoBehaviour
                 Vector3Int n = FaceDirections[d];
                 if (!FaceShows(type, GetBlock(x + n.x, y + n.y, z + n.z))) continue;
 
-                (clear ? seeThroughFaces : solidFaces).AddFace(centre, d, type);
+                (clear ? seeThroughFaces : solidFaces).AddFace(centre, d, FaceLook(type, d));
                 if (type != Water && type != Lava) bumpFaces.AddFace(centre, d, Stone);   // you sink into water and lava
             }
         }

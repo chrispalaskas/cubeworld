@@ -14,6 +14,7 @@ public partial class BlockInteractor
     {
         public readonly byte Result;
         public readonly byte[] Needs;   // in pairs: item, how many
+        public int Makes = 1;           // how many you get each time
 
         public Recipe(byte result, params byte[] needs)
         {
@@ -52,6 +53,20 @@ public partial class BlockInteractor
         new Recipe(IronSword,            BlockWorld.Iron, 2, BlockWorld.Wood, 1),
         new Recipe(GoldSword,            BlockWorld.Gold, 2, BlockWorld.Wood, 1),
         new Recipe(DiamondSword,         BlockWorld.Diamond, 2, BlockWorld.Wood, 1),
+
+        // Tools: pickaxes (3 + 2 wood), axes (3 + 1 wood) and shovels (1 + 2 wood)
+        new Recipe(WoodenPickaxe,  BlockWorld.Planks, 3, BlockWorld.Wood, 2),
+        new Recipe(StonePickaxe,   BlockWorld.Stone, 3, BlockWorld.Wood, 2),
+        new Recipe(IronPickaxe,    BlockWorld.Iron, 3, BlockWorld.Wood, 2),
+        new Recipe(DiamondPickaxe, BlockWorld.Diamond, 3, BlockWorld.Wood, 2),
+        new Recipe(WoodenAxe,      BlockWorld.Planks, 3, BlockWorld.Wood, 1),
+        new Recipe(StoneAxe,       BlockWorld.Stone, 3, BlockWorld.Wood, 1),
+        new Recipe(IronAxe,        BlockWorld.Iron, 3, BlockWorld.Wood, 1),
+        new Recipe(DiamondAxe,     BlockWorld.Diamond, 3, BlockWorld.Wood, 1),
+        new Recipe(WoodenShovel,   BlockWorld.Planks, 1, BlockWorld.Wood, 2),
+        new Recipe(StoneShovel,    BlockWorld.Stone, 1, BlockWorld.Wood, 2),
+        new Recipe(IronShovel,     BlockWorld.Iron, 1, BlockWorld.Wood, 2),
+        new Recipe(DiamondShovel,  BlockWorld.Diamond, 1, BlockWorld.Wood, 2),
     };
 
     // How long the "You made..." message stays up
@@ -71,6 +86,9 @@ public partial class BlockInteractor
     // Anything that comes from a recipe has to be made before you can use it
     bool HaveGot(byte item)
     {
+        if (Survival) return IsTool(item) || HowMany(item) > 0;   // in survival, it's what's in your pockets
+        if (item == BlockWorld.StarCrystal) return crafted.Contains(item);   // has to be found, on the mountain top
+
         foreach (Recipe recipe in Recipes)
             if (recipe.Result == item)
                 return crafted.Contains(item);
@@ -106,10 +124,29 @@ public partial class BlockInteractor
     {
         OpenInventory();
         crafting = true;
+        pocketCrafting = false;
+    }
+
+    // In survival you can craft without a table, straight from your
+    // inventory (press C) - but only small recipes, with 4 things or fewer.
+    // That's enough for planks and a new crafting table, so you never get stuck.
+    const int PocketSize = 4;
+    private bool pocketCrafting;
+
+    void OpenPocketCrafting()
+    {
+        crafting = true;
+        pocketCrafting = true;
     }
 
     void CraftingKeys()
     {
+        if (typingSearch)
+        {
+            if (Input.GetKeyDown(KeyCode.Escape)) typingSearch = false;
+            return;   // the letters are going into the search box
+        }
+
         if (Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(KeyCode.Escape) ||
             Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Tab))
         {
@@ -144,9 +181,15 @@ public partial class BlockInteractor
     // The thing the grid would make right now, or 0 if it doesn't match anything
     byte MatchRecipe()
     {
+        Recipe recipe = MatchingRecipe();
+        return recipe != null ? recipe.Result : (byte)0;
+    }
+
+    Recipe MatchingRecipe(bool anySize = false)
+    {
         int filled = 9 - CountInGrid(BlockWorld.Air);
 
-        foreach (Recipe recipe in Recipes)
+        foreach (Recipe recipe in ActiveRecipes)
         {
             int needed = 0;
             bool matches = true;
@@ -158,15 +201,52 @@ public partial class BlockInteractor
             }
 
             // Exactly the right things, and nothing extra
-            if (matches && needed == filled) return recipe.Result;
+            if (matches && needed == filled && (anySize || !pocketCrafting || needed <= PocketSize)) return recipe;
         }
-        return 0;
+        return null;
     }
 
     void Craft()
     {
-        byte made = MatchRecipe();
-        if (made == 0) return;
+        Recipe recipe = MatchingRecipe();
+        if (recipe != null)
+        {
+            Achievements.Unlock("craft");
+            if (recipe.Result >= WoodenPickaxe && recipe.Result <= DiamondPickaxe) Achievements.Unlock("pickaxe");
+        }
+        if (recipe == null)
+        {
+            if (pocketCrafting && MatchingRecipe(true) != null)
+            {
+                craftMessage = "That's too big to make in your hands - you need a crafting table for it.";
+                craftMessageTime = Time.time;
+            }
+            return;
+        }
+        byte made = recipe.Result;
+
+        // In survival you need the real blocks, and they get used up
+        if (Survival)
+        {
+            for (int i = 0; i < recipe.Needs.Length; i += 2)
+            {
+                int short_ = recipe.Needs[i + 1] - HowMany(recipe.Needs[i]);
+                if (short_ > 0)
+                {
+                    craftMessage = "You need " + short_ + " more " + ItemNames[recipe.Needs[i]] + " to make that.";
+                    craftMessageTime = Time.time;
+                    return;
+                }
+            }
+            for (int i = 0; i < recipe.Needs.Length; i += 2)
+                UseUp(recipe.Needs[i], recipe.Needs[i + 1]);
+            Give(made, recipe.Makes);
+
+            craftMessage = "You made " + (recipe.Makes > 1 ? recipe.Makes + " " : "") + ItemNames[made] + "! You've got "
+                         + HowMany(made) + " now.";
+            craftMessageTime = Time.time;
+            return;   // the grid stays filled, so you can make another
+        }
 
         bool firstTime = crafted.Add(made);
         SaveCrafted();
@@ -191,114 +271,7 @@ public partial class BlockInteractor
 
     // --- Drawing it ---
 
-    void DrawCrafting()
-    {
-        Color before = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.5f);
-        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
-        GUI.color = before;
-
-        // Everything is laid out on an 860 x 980 panel, which is shrunk to fit
-        // small windows and placed in the middle of the screen
-        const float width = 860f, height = 980f;
-        float scale = Mathf.Min(1f, (Screen.width - 32f) / width, (Screen.height - 120f) / height);
-        Matrix4x4 oldMatrix = GUI.matrix;
-        GUI.matrix = Matrix4x4.TRS(
-            new Vector3((Screen.width - width * scale) / 2f, Mathf.Max(8f, (Screen.height - 90f - height * scale) / 2f), 0f),
-            Quaternion.identity, Vector3.one * scale);
-
-        Event e = Event.current;
-        bool clicked = e.type == EventType.MouseDown;
-
-        GUI.Box(new Rect(0, 0, width, height), "");
-        GUI.Label(new Rect(0, 8, width, 24), "Crafting Table", centredLabel);
-        GUI.Label(new Rect(20, 32, width - 40, 24),
-                  "Pick a block on the hotbar (1-9, 0, or click it), then click a square to put it there.");
-
-        // --- The 3x3 grid ---
-        const float cell = 60f, gap = 6f, gridLeft = 30f, gridTop = 70f;
-        for (int i = 0; i < 9; i++)
-        {
-            Rect box = new Rect(gridLeft + (i % 3) * (cell + gap), gridTop + (i / 3) * (cell + gap), cell, cell);
-
-            if (clicked && box.Contains(e.mousePosition))
-            {
-                craftCursor = i;
-                craftGrid[i] = e.button == 1 ? BlockWorld.Air : selected;   // right click empties it
-                e.Use();
-            }
-
-            DrawSlot(box, i == craftCursor ? Color.yellow : (Color?)null);
-            if (craftGrid[i] != BlockWorld.Air)
-                DrawItemIcon(Shrink(box, 0.15f), craftGrid[i]);
-        }
-
-        // --- What it makes ---
-        byte result = MatchRecipe();
-        float gridSize = 3 * (cell + gap) - gap;
-        Rect resultBox = new Rect(gridLeft + gridSize + 70f, gridTop + cell + gap, cell, cell);
-
-        GUI.Label(new Rect(gridLeft + gridSize + 8f, resultBox.y + 18f, 60f, 24f), "makes", centredLabel);
-        DrawSlot(resultBox, result != 0 ? Color.green : (Color?)null);
-
-        if (result != 0)
-        {
-            DrawItemIcon(Shrink(resultBox, 0.15f), result);
-            GUI.Label(new Rect(resultBox.x - 50f, resultBox.yMax + 4f, cell + 100f, 24f), ItemNames[result], centredLabel);
-            GUI.Label(new Rect(resultBox.x - 50f, resultBox.yMax + 24f, cell + 100f, 24f), "Click it or press C", centredLabel);
-
-            if (clicked && e.button == 0 && resultBox.Contains(e.mousePosition))
-            {
-                Craft();
-                e.Use();
-            }
-        }
-
-        // --- The recipe book ---
-        const float bookLeft = 410f;
-        GUI.Label(new Rect(bookLeft, gridTop - 30f, 420f, 24f), "Recipes - click one to fill the grid");
-
-        for (int r = 0; r < Recipes.Length; r++)
-        {
-            Recipe recipe = Recipes[r];
-            Rect row = new Rect(bookLeft, gridTop - 6f + r * 30f, 430f, 27f);
-
-            if (clicked && e.button == 0 && row.Contains(e.mousePosition))
-            {
-                FillGrid(recipe);
-                e.Use();
-            }
-
-            GUI.color = new Color(0.15f, 0.15f, 0.15f, 0.9f);
-            GUI.DrawTexture(row, Texture2D.whiteTexture);
-            GUI.color = before;
-
-            float x = row.x + 6f;
-            for (int i = 0; i < recipe.Needs.Length; i += 2)
-            {
-                GUI.Label(new Rect(x, row.y + 3f, 28f, 24f), recipe.Needs[i + 1] + "x");
-                DrawItemIcon(new Rect(x + 22f, row.y + 2f, 24f, 24f), recipe.Needs[i]);
-                x += 52f;
-            }
-
-            GUI.Label(new Rect(x, row.y + 3f, 20f, 24f), "=");
-            DrawItemIcon(new Rect(x + 16f, row.y + 2f, 24f, 24f), recipe.Result);
-            GUI.Label(new Rect(x + 46f, row.y + 3f, row.xMax - x - 46f, 24f), ItemNames[recipe.Result]);
-        }
-
-        // --- Messages and help along the bottom ---
-        if (Time.time - craftMessageTime < MessageSeconds)
-        {
-            GUI.color = Color.yellow;
-            GUI.Label(new Rect(0, height - 66f, width, 24f), craftMessage, centredLabel);
-            GUI.color = before;
-        }
-        GUI.Label(new Rect(0, height - 44f, width, 24f),
-                  "Right click a square to empty it.   Keys: arrows + Enter put a block, Backspace empties, C makes it", centredLabel);
-        GUI.Label(new Rect(0, height - 24f, width, 24f), "E or Esc: close", centredLabel);
-
-        GUI.matrix = oldMatrix;
-    }
+    // (The crafting screen itself is drawn in CraftingScreen.cs)
 
     // A dark square, with a coloured frame round it if asked
     void DrawSlot(Rect box, Color? frame)
@@ -322,7 +295,7 @@ public partial class BlockInteractor
 
     // Little pictures drawn as text: each letter is one pixel, top row first
     // (x is drawn in whatever colour "special" is - swords use it for the blade)
-    static Texture2D PixelArt(string[] rows, Color special = default(Color))
+    public static Texture2D PixelArt(string[] rows, Color special = default(Color))
     {
         Texture2D picture = new Texture2D(8, 8);
         picture.filterMode = FilterMode.Point;
@@ -344,6 +317,7 @@ public partial class BlockInteractor
                     case 'x': colour = special; break;
                     case 'p': colour = new Color(0.75f, 0.58f, 0.34f); break;   // planks
                     case 'o': colour = new Color(1.00f, 0.55f, 0.10f); break;   // orange
+                    case 's': colour = new Color(0.55f, 0.55f, 0.57f); break;   // stone grey
                     case 'y': colour = new Color(1.00f, 0.85f, 0.20f); break;   // yellow
                     default:  colour = Color.clear; break;                      // see-through
                 }

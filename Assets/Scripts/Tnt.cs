@@ -90,6 +90,7 @@ public class Tnt : MonoBehaviour
     void Explode()
     {
         world.LitTnt.Remove(cell);
+        Sounds.Boom(cell);
         world.SetBlock(cell.x, cell.y, cell.z, BlockWorld.Air);
 
         for (int dx = -radius; dx <= radius; dx++)
@@ -120,6 +121,20 @@ public class Tnt : MonoBehaviour
             if (Vector3.Distance(chicken.transform.position, cell) <= radius)
                 chicken.BlowUp();
         }
+
+        // In survival, being too close to a blast hurts - a lot, right next to it
+        PlayerHealth health = PlayerHealth.Instance;
+        if (health != null)
+        {
+            float away = Vector3.Distance(health.transform.position + Vector3.up * 0.9f, cell);
+            float reach = radius + 2f;
+            if (away < reach)
+                health.Hurt(Mathf.CeilToInt((1f - away / reach) * (radius >= MegaBlastRadius ? 30f : 18f)), "You were too close to the TNT.");
+        }
+
+        foreach (Monster monster in Monster.All.ToArray())
+            if (Vector3.Distance(monster.transform.position, cell) <= radius)
+                monster.Hit(100, cell);
 
         // People don't get hurt - they get sent flying
         foreach (Villager person in FindObjectsByType<Villager>(FindObjectsSortMode.None))

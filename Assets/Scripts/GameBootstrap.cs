@@ -57,6 +57,8 @@ public class GameBootstrap : MonoBehaviour
         walker.Pitch = pitch;
         player.AddComponent<BlockInteractor>();
         player.AddComponent<PortalTraveller>();
+        if (WorldMenu.Survival) player.AddComponent<PlayerHealth>();
+        player.AddComponent<Minimap>();
 
         // --- The wildlife ---
         Squirrel.SpawnAll(world);
@@ -67,6 +69,15 @@ public class GameBootstrap : MonoBehaviour
         Unicorn.SpawnAll(world);
         Dragon.SpawnAll(world);
         if (WorldMenu.CurrentPlace == WorldSaves.Nether) NetherFire.Begin();
+        if (WorldMenu.CurrentPlace == WorldSaves.Home)
+        {
+            DayNight.Begin();
+            Weather.Begin(world);
+            AnimalHerd.Begin(world, position);
+            StructureWatcher.Begin(world);
+        }
+        Vehicle.LoadAll(world);
+        if (WorldMenu.Survival && WorldMenu.CurrentPlace != WorldSaves.MagicLand) Monster.BeginSpawning(world);
 
         return walker;
     }
@@ -90,6 +101,16 @@ public class GameBootstrap : MonoBehaviour
         DestroyAll<Unicorn>();
         DestroyAll<Dragon>();
         DestroyAll<NetherFire>();
+        DestroyAll<Monster>();
+        DestroyAll<MonsterSpawner>();
+        DestroyAll<MonsterShot>();
+        DestroyAll<ItemDrop>();
+        DestroyAll<DayNight>();
+        DestroyAll<Weather>();
+        DestroyAll<AnimalHerd>();
+        DestroyAll<FishSchool>();
+        DestroyAll<StructureWatcher>();
+        DestroyAll<Vehicle>();
         DestroyAll<FirstPersonPlayer>();
         DestroyAll<BlockWorld>();
     }

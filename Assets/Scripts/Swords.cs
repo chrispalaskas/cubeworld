@@ -54,7 +54,7 @@ public partial class BlockInteractor
     {
         swingTime = SwingSeconds;
 
-        MonoBehaviour animal = AnimalInSights(SwordReach(selected));
+        MonoBehaviour animal = AnimalInSights(SwordReach(selected), true);
         if (animal == null)
         {
             Break();
@@ -66,6 +66,15 @@ public partial class BlockInteractor
         {
             ((ILeashable)caughtAnimal).Release();
             caughtAnimal = null;
+        }
+
+        // Monsters take a few hits - better swords take fewer
+        Monster monster = animal as Monster;
+        if (monster != null)
+        {
+            Sounds.Thwack(monster.transform.position);
+            monster.Hit(SwordDamage(selected), transform.position);
+            return;
         }
 
         // Only a diamond sword is strong enough to defeat a person.
@@ -98,9 +107,21 @@ public partial class BlockInteractor
 
         Chicken chicken = animal as Chicken;
         if (chicken != null)
+        {
+            if (Survival) ItemDrop.Spawn(ChickenLeg, 1, chicken.transform.position + Vector3.up * 0.3f);   // (dinner)
+            if (Survival) ItemDrop.Spawn(BlockWorld.Feather, Random.Range(0, 3), chicken.transform.position + Vector3.up * 0.3f);
             chicken.BlowUp();   // a puff of feathers
+        }
         else
             Destroy(animal.gameObject);
+    }
+
+    static int SwordDamage(byte sword)
+    {
+        if (sword == DiamondSword) return 10;
+        if (sword == IronSword || sword == GoldSword) return 7;
+        if (sword == StoneSword) return 5;
+        return 4;
     }
 
     // --- The sword in your hand ---
