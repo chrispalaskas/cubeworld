@@ -85,6 +85,7 @@ public class FirstPersonPlayer : MonoBehaviour
     void Update()
     {
         if (Tutorial.IsOpen) return;   // the game waits while you watch
+        if (PlayerLook.Dressing || Mods.ScreenOpen) return;
         // While the inventory is open, keys and clicks belong to it. We still
         // fall and sink, but can't walk, look around, or pause.
         bool inInventory = BlockInteractor.InventoryOpen || Time.frameCount == BlockInteractor.InventoryClosedFrame;
@@ -153,6 +154,10 @@ public class FirstPersonPlayer : MonoBehaviour
                          (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)) &&
                          (tummy == null || tummy.Food > 6);
         if (sprinting) move *= sprintBoost;
+        if (Effects.Fast) move *= 1.5f;          // a speed potion
+        if (Mods.SuperSpeed) move *= 1.8f;       // (Mods.cs)
+        move *= PlayerLook.FormSpeed;            // a golem is slow, a spider quick (Transform.cs)
+        if (riding is Camel) move *= Ride.SpeedBoost;
         if (tummy != null) tummy.Sprinting = sprinting;
 
         Camera eye = head.GetComponent<Camera>();
@@ -205,9 +210,11 @@ public class FirstPersonPlayer : MonoBehaviour
         }
 
         bool onLadder = riding == null && (BlockWorld.IsLadder(inside) || BlockWorld.IsLadder(BlockAt(transform.position + Vector3.up * 1.1f)));
-        bool winged = hands != null && hands.HoldingWings;
+        bool winged = (hands != null && hands.HoldingWings) || Mods.Flying || PlayerLook.FormFlies;
+        // A spider climbs right up walls
+        if (PlayerLook.FormClimbs && forwards > 0f && (controller.collisionFlags & CollisionFlags.Sides) != 0) onLadder = true;
 
-        if (riding != null || winged)
+        if ((riding != null && !(riding is Camel)) || winged)   // (camels walk - they don't fly!)
         {
             // On a unicorn, or holding wings, you can fly! Hold Space to go
             // up, and let go to glide gently back down.
@@ -227,11 +234,11 @@ public class FirstPersonPlayer : MonoBehaviour
         }
         else if (swimming)
         {
-            move *= 0.6f;   // water slows you down
+            move *= 0.6f * PlayerLook.FormSwimming;   // water slows you down (but not a penguin!)
 
             // Hold Space to swim up, otherwise sink gently
             if (spaceHeld)
-                verticalSpeed = swimSpeed;
+                verticalSpeed = swimSpeed * Mathf.Min(PlayerLook.FormSwimming, 1.6f);
             else
                 verticalSpeed = Mathf.Max(verticalSpeed - gravity * 0.25f * Time.deltaTime, -2f);
         }
@@ -248,8 +255,12 @@ public class FirstPersonPlayer : MonoBehaviour
                 verticalSpeed = bounceSpeed * 1.45f;   // BOING!
             else if (under == BlockWorld.BouncePad || under == BlockWorld.MushroomCap)
                 verticalSpeed = bounceSpeed;   // boing!
+            else if (under == BlockWorld.Elevator && (spacePressed || Input.GetKeyDown(KeyCode.LeftControl)) && !ignoreKeys)
+                RideElevator(spacePressed);
             else if (spacePressed)
-                verticalSpeed = jumpSpeed;
+                verticalSpeed = jumpSpeed * (Effects.Springy ? 1.6f : 1f) * (Mods.SuperJump ? 1.9f : 1f) * PlayerLook.FormJump;   // a jumping potion, or a mod
+            else if (Mods.BouncyGround || PlayerLook.FormBounces)
+                verticalSpeed = jumpSpeed * 1.1f;   // boing boing boing!
         }
         else
         {
@@ -336,6 +347,22 @@ public class FirstPersonPlayer : MonoBehaviour
         }
     }
 
+    // Up to the next elevator above you, or down to the one below
+    void RideElevator(bool up)
+    {
+        BlockWorld world = BlockWorld.Instance;
+        Vector3Int under = Vector3Int.RoundToInt(transform.position + Vector3.down * 0.3f);
+        for (int y = under.y + (up ? 1 : -1); y >= 0 && y < BlockWorld.SizeY - 2; y += up ? 1 : -1)
+        {
+            if (world.GetBlock(under.x, y, under.z) != BlockWorld.Elevator) continue;
+            if (world.GetBlock(under.x, y + 1, under.z) != BlockWorld.Air || world.GetBlock(under.x, y + 2, under.z) != BlockWorld.Air) continue;
+            Teleport(new Vector3(under.x, y + 0.5f, under.z));
+            Sounds.Whoosh(transform.position);
+            return;
+        }
+        PortalTraveller.Announce(up ? "There's no elevator above this one." : "There's no elevator below this one.");
+    }
+
     byte BlockAt(Vector3 point)
     {
         if (BlockWorld.Instance == null) return BlockWorld.Air;
@@ -368,7 +395,8 @@ public class FirstPersonPlayer : MonoBehaviour
         controller.enabled = false;
         transform.position = ride.Seat;
         verticalSpeed = 0f;
-        Achievements.Unlock(ride is Cart ? "cart" : "boat");
+        if (ride is Balloon) PortalTraveller.Announce("All aboard the balloon! W to float along, Space to go up, Left Ctrl to come down, E to climb out.");
+        else Achievements.Unlock(ride is Cart ? "cart" : "boat");
     }
 
     public void LeaveVehicle()
@@ -384,6 +412,17 @@ public class FirstPersonPlayer : MonoBehaviour
         vehicle = null;
         transform.position = off;
         controller.enabled = true;
+    }
+
+    // Whoosh - straight to somewhere else (feet at this spot)
+    public void Teleport(Vector3 feet)
+    {
+        LeaveVehicle();
+        Dismount();
+        controller.enabled = false;
+        transform.position = feet;
+        controller.enabled = true;
+        verticalSpeed = 0f;
     }
 
     // Where the compass points: your bed, or where the world began
@@ -418,7 +457,7 @@ public class FirstPersonPlayer : MonoBehaviour
     // Moon jumping in the Magic Land!
     float Gravity
     {
-        get { return WorldMenu.CurrentPlace == WorldSaves.MagicLand ? gravity * magicLandGravity : gravity; }
+        get { return (WorldMenu.CurrentPlace == WorldSaves.MagicLand ? gravity * magicLandGravity : gravity) * (Mods.MoonGravity ? 0.3f : 1f); }
     }
 
     byte BlockUnderFeet()
@@ -434,7 +473,8 @@ public class FirstPersonPlayer : MonoBehaviour
         if (BlockWorld.Instance == null) return false;
 
         Vector3Int cell = Vector3Int.RoundToInt(transform.position + Vector3.up * 0.4f);
-        return BlockWorld.Instance.GetBlock(cell.x, cell.y, cell.z) == BlockWorld.Water;
+        byte type = BlockWorld.Instance.GetBlock(cell.x, cell.y, cell.z);
+        return type == BlockWorld.Water || type == BlockWorld.ChocolateRiver;   // you can swim in melted chocolate too!
     }
 
     // --- Riding ---

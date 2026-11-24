@@ -55,6 +55,16 @@ public partial class BlockWorld
             for (int z = 3; z < SizeZ - 3; z++)
             {
                 Land land = lands[x, z];
+
+                // Flowers dotted about the grass
+                if (land != Land.Desert && random.NextDouble() < 0.015)
+                {
+                    int soil = GetSurfaceHeight(x, z);
+                    if (soil > 0 && blocks[x, soil, z] == Grass && soil + 1 < SizeY)
+                        blocks[x, soil + 1, z] = (byte)(FlowerFirst + random.Next(0, 3));
+                    continue;
+                }
+
                 double chance = land == Land.Jungle ? 0.05 : land == Land.Desert ? 0.008 : land == Land.Snowy ? 0.01 : 0.02;
                 if (random.NextDouble() > chance) continue;
 

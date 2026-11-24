@@ -58,6 +58,19 @@ public partial class BlockInteractor
         return item;
     }
 
+    // Picked up some armour in the hotbar? It only works once you put it on!
+    private byte lastHeld;
+    void RemindAboutArmour()
+    {
+        if (selected == lastHeld) return;
+        lastHeld = selected;
+        PlayerHealth health = PlayerHealth.Instance;
+        if (!IsArmour(selected) || health == null) return;
+        int level = selected - BlockWorld.LeatherArmour + 1;
+        if (health.Armour < level)
+            PortalTraveller.Announce("Press E (or right click) to put on the " + ItemNames[selected] + " - it only protects you once you're wearing it!");
+    }
+
     static bool IsArmour(byte item) { return item >= BlockWorld.LeatherArmour && item <= BlockWorld.DiamondArmour; }
 
     // Things you use rather than place. True if it was one of those.
@@ -134,16 +147,22 @@ public partial class BlockInteractor
 
     // --- Shooting ---
 
+    // A bow in your pocket (in creative, you've always got one)
+    bool HasBow()
+    {
+        return !Survival || HowMany(BlockWorld.Bow) > 0;
+    }
+
     void ShootArrow()
     {
-        if (Survival && !UseUp(BlockWorld.Arrow))
+        if (Survival && !PlayerLook.FormShoots && !UseUp(BlockWorld.Arrow))
         {
             PortalTraveller.Announce("You've run out of arrows! Make some: gravel, wood and a feather.");
             return;
         }
         squeezeTime = 0.15f;
         Sounds.Twang(transform.position);
-        MonsterShot.PlayerArrow(cam.transform.position + cam.transform.forward * 0.8f, cam.transform.forward * 30f);
+        MonsterShot.PlayerArrow(cam.transform.position + cam.transform.forward * 0.8f, cam.transform.forward * 30f, Enchanted(BlockWorld.Bow) ? 10 : 6);
     }
 
     // --- Fishing ---
@@ -285,6 +304,7 @@ public partial class BlockInteractor
 
     void PickUpVehicle(Vehicle vehicle)
     {
+        if (vehicle is Balloon) { PortalTraveller.Announce("That's the village's hot air balloon! Press E to climb in."); return; }
         if (Survival) Give(vehicle.Item);
         Sounds.Pop(vehicle.transform.position);
         Destroy(vehicle.gameObject);

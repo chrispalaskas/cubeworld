@@ -275,6 +275,7 @@ public partial class BlockWorld : MonoBehaviour
         blocks = new byte[SizeX, SizeY, SizeZ];
         groundHeight = new int[SizeX, SizeZ];
         chests.Clear();
+        observerAlerts.Clear();
         timers.Clear();
         starCrystals.Clear();
         crops.Clear();
@@ -320,7 +321,7 @@ public partial class BlockWorld : MonoBehaviour
     {
         // ONE material per block type, shared by every cube of that type.
         // Giving each cube its own material would bring the game to a crawl.
-        materials = new Material[256];
+        materials = new Material[257];   // every block number, and the side of grass
         // Natural blocks each get their own pattern, plus a faint darker edge
         // so you can see where one block stops and the next one starts
         materials[Grass]  = MakePixelMaterial(GrassPixel, true);
@@ -443,6 +444,7 @@ public partial class BlockWorld : MonoBehaviour
         CreateFurnitureMaterials();   // (Furniture.cs)
         CreateMoreMaterials();        // (MoreBlocks.cs)
         CreateBuildingMaterials();    // (Building.cs)
+        CreateExtraMaterials();       // (Extras.cs)
 
         // Borrow Unity's built-in cube shape so every block can share it
         GameObject temp = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -470,6 +472,8 @@ public partial class BlockWorld : MonoBehaviour
         mat.mainTexture = picture;
         return mat;
     }
+
+    public static Material MakeSeeThrough(Color color) { return MakeSeeThroughMaterial(color); }
 
     static Material MakeSeeThroughMaterial(Color color)
     {
@@ -1558,7 +1562,7 @@ public partial class BlockWorld : MonoBehaviour
                     int y = GetSurfaceHeight(x, z);
 
                     byte top = GetBlock(x, y, z);
-                    if (y >= 0 && (top == Grass || top == MagicGrass || top == Ash))
+                    if (y >= 0 && (top == Grass || top == MagicGrass || top == Ash || top == CandyGrass))
                         return new Vector3(x, y + 0.6f, z);   // +0.5 is the top face of the block
                 }
             }
@@ -1575,7 +1579,7 @@ public partial class BlockWorld : MonoBehaviour
 
         // A chest or dispenser that's broken or blown up loses everything inside it
         Vector3Int here = new Vector3Int(x, y, z);
-        if ((IsContainer(blocks[x, y, z]) || IsFurnace(blocks[x, y, z])) && type != blocks[x, y, z])
+        if ((IsContainer(blocks[x, y, z]) || IsFurnace(blocks[x, y, z]) || blocks[x, y, z] == Cauldron || blocks[x, y, z] == Observer) && type != blocks[x, y, z])
             chests.Remove(here);   // (furnaces keep what they're cooking in the same place)
         if (blocks[x, y, z] == NoteBlock && type != NoteBlock) noteTunes.Remove(here);
         if (type == Timer) timers.Add(here);
@@ -1586,7 +1590,9 @@ public partial class BlockWorld : MonoBehaviour
         TrackFurnace(here, type);
         TrackBuilding(here, type);
 
+        bool changed = blocks[x, y, z] != type;
         blocks[x, y, z] = type;
+        if (changed) TellObservers(here);
         CheckForFalling(x, y, z);
 
         // Its chunk needs redrawing - and if it's on the edge of the chunk,
@@ -1689,14 +1695,14 @@ public partial class BlockWorld : MonoBehaviour
     // so a block next to any of them is on show
     static bool SeeThrough(byte type)
     {
-        return type == Air || type == Water || type == Glass || type == Fire || type == Cable || type == PressurePlate || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type);
+        return type == Air || type == Water || type == Glass || type == Fire || type == Cable || type == PressurePlate || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type) || ExtraSeeThrough(type);
     }
 
     // Water is drawn where it touches air, glass (so you can build a fish
     // tank), or the gaps around stairs and doors
     static bool ShowsWater(byte type)
     {
-        return type == Air || type == Glass || type == Fire || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type);
+        return type == Air || type == Glass || type == Fire || Shaped(type) || IsFurniture(type) || IsWheat(type) || IsModel(type) || IsStainedGlass(type);
     }
 
     // Stairs, doors and lamps are drawn one by one, not as part of a chunk
@@ -2004,7 +2010,9 @@ public partial class BlockWorld : MonoBehaviour
     static bool FaceShows(byte type, byte neighbour)
     {
         if (type == Water) return ShowsWater(neighbour);
-        if (type == Glass) return neighbour == Air || neighbour == Water || Shaped(neighbour) || IsFurniture(neighbour) || IsModel(neighbour);   // no faces between panes
+        if (type == ChocolateRiver) return neighbour != ChocolateRiver && neighbour != Water && SeeThrough(neighbour);
+        if (IsStainedGlass(type)) return neighbour != type && SeeThrough(neighbour);
+        if (type == Glass) return neighbour == Air || neighbour == Water || Shaped(neighbour) || IsFurniture(neighbour) || IsModel(neighbour) || IsStainedGlass(neighbour);   // no faces between panes
         return SeeThrough(neighbour);
     }
 
@@ -2045,7 +2053,7 @@ public partial class BlockWorld : MonoBehaviour
         public readonly List<Vector3> corners = new List<Vector3>();
         public readonly List<Vector3> normals = new List<Vector3>();
         public readonly List<Vector2> uvs = new List<Vector2>();
-        public readonly SortedDictionary<byte, List<int>> trianglesByType = new SortedDictionary<byte, List<int>>();
+        public readonly SortedDictionary<int, List<int>> trianglesByType = new SortedDictionary<int, List<int>>();
 
         public void Clear()
         {
@@ -2055,7 +2063,7 @@ public partial class BlockWorld : MonoBehaviour
             foreach (List<int> list in trianglesByType.Values) list.Clear();
         }
 
-        public void AddFace(Vector3 centre, int direction, byte type)
+        public void AddFace(Vector3 centre, int direction, int type)
         {
             int first = corners.Count;
             for (int c = 0; c < 4; c++)
@@ -2085,7 +2093,7 @@ public partial class BlockWorld : MonoBehaviour
 
             List<Material> used = new List<Material>();
             List<List<int>> parts = new List<List<int>>();
-            foreach (KeyValuePair<byte, List<int>> entry in trianglesByType)
+            foreach (KeyValuePair<int, List<int>> entry in trianglesByType)
             {
                 if (entry.Value.Count == 0) continue;
                 used.Add(materials[entry.Key]);
@@ -2128,7 +2136,7 @@ public partial class BlockWorld : MonoBehaviour
             byte type = blocks[x, y, z];
             if (type == Air || Special(type)) continue;
 
-            bool clear = type == Water || type == Glass;
+            bool clear = type == Water || type == Glass || ExtraSeeThrough(type);
             Vector3 centre = new Vector3(x, y, z);
 
             for (int d = 0; d < 6; d++)
@@ -2139,7 +2147,7 @@ public partial class BlockWorld : MonoBehaviour
                 if (!FaceShows(type, GetBlock(x + n.x, y + n.y, z + n.z))) continue;
 
                 (clear ? seeThroughFaces : solidFaces).AddFace(centre, d, FaceLook(type, d));
-                if (type != Water && type != Lava) bumpFaces.AddFace(centre, d, Stone);   // you sink into water and lava
+                if (type != Water && type != Lava && type != ChocolateRiver) bumpFaces.AddFace(centre, d, Stone);   // you sink into water and lava
             }
         }
 

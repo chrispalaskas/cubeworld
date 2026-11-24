@@ -62,6 +62,31 @@ public class WorldMenu : MonoBehaviour
             return;
         }
 
+        // O: the Mods screen (Mods.cs) - and O or Esc again to close it
+        if (Mods.ScreenOpen)
+        {
+            bool typing = GUIUtility.keyboardControl != 0;   // (typing a power's name - an O is just a letter)
+            if ((Input.GetKeyDown(KeyCode.O) && !typing) || Input.GetKeyDown(KeyCode.Escape)) Mods.CloseScreen();
+            return;
+        }
+        if (!BlockInteractor.InventoryOpen && Input.GetKeyDown(KeyCode.O))
+        {
+            Mods.OpenScreen();
+            return;
+        }
+
+        // G: teleport to the Stone Golem's hall
+        if (!BlockInteractor.InventoryOpen && Input.GetKeyDown(KeyCode.G))
+            GoToGolemHall();
+
+        // J: teleport to the village
+        if (!BlockInteractor.InventoryOpen && Input.GetKeyDown(KeyCode.J))
+            GoToVillage();
+
+        // P: teleport to the pyramid
+        if (!BlockInteractor.InventoryOpen && Input.GetKeyDown(KeyCode.P))
+            GoToPyramid();
+
         // H: watch the tutorial (and it opens by itself the very first time you play)
         if (!BlockInteractor.InventoryOpen && (Input.GetKeyDown(KeyCode.H) || PlayerPrefs.GetInt("tutorial-seen", 0) == 0))
         {
@@ -115,7 +140,8 @@ public class WorldMenu : MonoBehaviour
     {
         bool magic = place == WorldSaves.MagicLand;
         bool nether = place == WorldSaves.Nether;
-        world = new GameObject(magic ? "Magic Land" : nether ? "Nether" : "World").AddComponent<BlockWorld>();
+        bool candy = place == WorldSaves.CandyLand;
+        world = new GameObject(magic ? "Magic Land" : nether ? "Nether" : candy ? "Candy Land" : "World").AddComponent<BlockWorld>();
         Vector3 position;
         float yaw, pitch;
         bool brandNew = !WorldSaves.Exists(slot, place);
@@ -124,6 +150,7 @@ public class WorldMenu : MonoBehaviour
         {
             if (magic) world.GenerateMagicLand();
             else if (nether) world.GenerateNether();
+            else if (candy) world.GenerateCandyLand();
             else world.Generate();
 
             position = world.FindSpawnPoint();
@@ -133,12 +160,13 @@ public class WorldMenu : MonoBehaviour
             // A way back home, right next to you
             if (magic) world.PlaceReturnPortal(position, BlockWorld.MagicPortal, BlockWorld.MagicGrass);
             if (nether) world.PlaceReturnPortal(position, BlockWorld.FirePortal, BlockWorld.Ash);
+            if (candy) world.PlaceReturnPortal(position, BlockWorld.CandyPortal, BlockWorld.CandyGrass);
         }
         else if (!WorldSaves.Load(slot, place, world, out position, out yaw, out pitch))
         {
             Destroy(world.gameObject);
             world = null;
-            problem = "World " + (slot + 1) + (magic ? "'s Magic Land" : nether ? "'s Nether" : "") +
+            problem = "World " + (slot + 1) + (magic ? "'s Magic Land" : nether ? "'s Nether" : candy ? "'s Candy Land" : "") +
                       " couldn't be loaded - the save may be damaged. You can delete it and start a new one.";
             return false;
         }
@@ -171,6 +199,13 @@ public class WorldMenu : MonoBehaviour
     }
 
     // A fire portal: to the Nether - or, from there, back home
+    // A candy portal: to the Candy Land - or, from there, back home
+    public static void TravelThroughCandyPortal()
+    {
+        if (instance != null && instance.Playing)
+            instance.Travel(instance.currentPlace == WorldSaves.CandyLand ? WorldSaves.Home : WorldSaves.CandyLand);
+    }
+
     public static void TravelThroughFirePortal()
     {
         if (instance != null && instance.Playing)
@@ -206,8 +241,10 @@ public class WorldMenu : MonoBehaviour
             if (wasRiding) player.MountNearestUnicornOnStart = true;   // still on its back when you arrive
             if (destination == WorldSaves.Nether) Achievements.Unlock("nether");
             if (destination == WorldSaves.MagicLand) Achievements.Unlock("magic");
+            if (destination == WorldSaves.CandyLand) Achievements.Unlock("candy");
             arrivalMessage = destination == WorldSaves.MagicLand ? "Welcome to the Magic Land!"
                            : destination == WorldSaves.Nether ? "Welcome to the Nether!"
+                           : destination == WorldSaves.CandyLand ? "Welcome to the Candy Land!"
                            : "Welcome home!";
             arrivalTime = Time.time;
         }
@@ -226,7 +263,8 @@ public class WorldMenu : MonoBehaviour
         Camera cam = Camera.main;
         bool home = place == WorldSaves.Home;
         bool nether = place == WorldSaves.Nether;
-        Color sky = nether ? new Color(0.30f, 0.07f, 0.04f) : new Color(0.38f, 0.22f, 0.55f);
+        bool candy = place == WorldSaves.CandyLand;
+        Color sky = nether ? new Color(0.30f, 0.07f, 0.04f) : candy ? new Color(1.00f, 0.75f, 0.88f) : new Color(0.38f, 0.22f, 0.55f);
 
         if (cam != null)
         {
@@ -238,7 +276,7 @@ public class WorldMenu : MonoBehaviour
         RenderSettings.fogColor = sky;
         RenderSettings.fogMode = FogMode.Linear;
         RenderSettings.fogStartDistance = nether ? 15f : 25f;
-        RenderSettings.fogEndDistance = nether ? 65f : 80f;
+        RenderSettings.fogEndDistance = nether ? 65f : candy ? 110f : 80f;
 
         foreach (Light light in FindObjectsByType<Light>(FindObjectsSortMode.None))
             if (light.type == LightType.Directional)
@@ -346,6 +384,7 @@ public class WorldMenu : MonoBehaviour
         }
 
         if (Tutorial.IsOpen) return;   // it draws itself, over everything
+        if (Playing && Mods.ScreenOpen) { Mods.Draw(); return; }
 
         if (!Playing)
             DrawMenu();
@@ -435,20 +474,107 @@ public class WorldMenu : MonoBehaviour
             GUI.Label(new Rect(x, y + 30, width, 48), problem);
     }
 
+    // Just inside the doorway of the Golem Hall, facing in
+    void GoToGolemHall()
+    {
+        if (currentPlace != WorldSaves.Home)
+        {
+            PortalTraveller.Announce("The Golem Hall is in your home world - go back there first!");
+            return;
+        }
+        Vector3 hall;
+        if (!Structures.GolemHall(out hall))
+        {
+            PortalTraveller.Announce("This world hasn't got a Golem Hall - there was nowhere deep enough to build one.");
+            return;
+        }
+
+        Vector3 feet = new Vector3(hall.x, hall.y - 0.5f, hall.z - 5f);
+        player.Teleport(feet);
+        player.transform.rotation = Quaternion.Euler(0f, 0f, 0f);   // looking into the hall
+        Sounds.Whoosh(feet);
+        Cursor.lockState = CursorLockMode.Locked;   // back into the game, if you clicked it on the pause screen
+        Cursor.visible = false;
+
+        PortalTraveller.Announce(Structures.GolemDefeated ? "Welcome back to the Golem Hall. It's very quiet now..."
+                               : Survival ? "You're in the Golem Hall... get ready to fight!"
+                               : "You're in the Golem Hall. (The Stone Golem only comes out in survival worlds.)");
+    }
+
+    void GoToVillage()
+    {
+        if (currentPlace != WorldSaves.Home)
+        {
+            PortalTraveller.Announce("The village is in your home world - go back there first!");
+            return;
+        }
+        Vector3 village;
+        if (!Structures.VillageCentre(out village))
+        {
+            PortalTraveller.Announce("This world hasn't got a village - there was nowhere flat enough to build one.");
+            return;
+        }
+
+        Vector3 feet = village + Vector3.up * 0.1f;
+        player.Teleport(feet);
+        player.transform.rotation = Quaternion.Euler(0f, 225f, 0f);   // looking at the well
+        Sounds.Whoosh(feet);
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+        PortalTraveller.Announce("Welcome to the village!");
+    }
+
+    void GoToPyramid()
+    {
+        if (currentPlace != WorldSaves.Home)
+        {
+            PortalTraveller.Announce("The pyramid is in your home world - go back there first!");
+            return;
+        }
+        Vector3 pyramid;
+        if (!Structures.Spot("pyramid", out pyramid))
+        {
+            PortalTraveller.Announce("This world hasn't got a pyramid - it was made before there were deserts.");
+            return;
+        }
+
+        // Outside the door (the tunnel faces south), so you still get to jump the lava pit!
+        int x = Mathf.RoundToInt(pyramid.x), z = Mathf.RoundToInt(pyramid.z) - 9;
+        int top = BlockWorld.Instance != null ? BlockWorld.Instance.GetSurfaceHeight(x, z) : -1;
+        Vector3 feet = new Vector3(x, top > 0 ? top + 1.1f : pyramid.y + 0.1f, z);
+        player.Teleport(feet);
+        player.transform.rotation = Quaternion.Euler(0f, 0f, 0f);   // looking at the pyramid
+        Sounds.Whoosh(feet);
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+        PortalTraveller.Announce(Structures.MummyDefeated ? "Back at the pyramid. The mummy's gone - it's safe now."
+                               : "The pyramid! Jump the lava in the tunnel... and watch out for the mummy!");
+    }
+
     void DrawPauseScreen()
     {
         DarkenScreen(0.4f);
 
         float width = Mathf.Min(420f, Screen.width - 32f);
-        Rect box = new Rect((Screen.width - width) / 2f, Screen.height / 2f - 80f, width, 190);
+        Rect box = new Rect((Screen.width - width) / 2f, Screen.height / 2f - 120f, width, 352);
         GUI.Box(box, "");
 
-        string where = currentPlace == WorldSaves.MagicLand ? " (Magic Land)" : currentPlace == WorldSaves.Nether ? " (Nether)" : "";
+        string where = currentPlace == WorldSaves.MagicLand ? " (Magic Land)" : currentPlace == WorldSaves.Nether ? " (Nether)"
+                     : currentPlace == WorldSaves.CandyLand ? " (Candy Land)" : "";
         GUI.Label(new Rect(box.x + 20, box.y + 14, width - 40, 30), "Paused - World " + (currentSlot + 1) + where, bigLabelStyle);
         GUI.Label(new Rect(box.x + 20, box.y + 54, width - 40, 24), "Enter or click: keep playing");
         GUI.Label(new Rect(box.x + 20, box.y + 80, width - 40, 24), "M: save and go back to the world menu");
         GUI.Label(new Rect(box.x + 20, box.y + 116, width - 40, 24), "Your world also saves itself every minute.");
         GUI.Label(new Rect(box.x + 20, box.y + 146, width - 40, 24), "Achievements: " + Achievements.Got + " of " + Achievements.Total + "     H: how to play");
+        if (currentPlace == WorldSaves.Home && GUI.Button(new Rect(box.x + 20, box.y + 178, width - 40, 34), "Go to the Stone Golem's Hall  (G)"))
+            GoToGolemHall();
+        if (currentPlace == WorldSaves.Home && GUI.Button(new Rect(box.x + 20, box.y + 220, width - 40, 34), "Go to the Village  (J)"))
+            GoToVillage();
+        if (currentPlace == WorldSaves.Home && GUI.Button(new Rect(box.x + 20, box.y + 262, width - 40, 34), "Go to the Pyramid  (P)"))
+            GoToPyramid();
+        int modsOn = Mods.HowManyOn;
+        if (GUI.Button(new Rect(box.x + 20, box.y + 304, width - 40, 34), "Mods  (O)" + (modsOn > 0 ? "   - " + modsOn + " on" : "")))
+            Mods.OpenScreen();
     }
 
     static void DarkenScreen(float amount)

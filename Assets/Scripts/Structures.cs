@@ -14,23 +14,35 @@ using UnityEngine;
 //                    there (in survival) - a giant who smashes and throws boulders.
 //   Buried treasure: hold a treasure map (from dungeon and village chests) and
 //                    it points the way to a red X. Dig down three blocks!
-public static class Structures
+public static partial class Structures
 {
     static string Key(string what) { return "world" + (WorldMenu.CurrentSlot + 1) + "-" + what; }
     static string Key(int slot, string what) { return "world" + (slot + 1) + "-" + what; }
 
     public static void Forget(int slot)
     {
-        foreach (string what in new[] { "village", "village-built", "dungeons", "golem-hall", "golem-hall-built", "golem-defeated", "treasure" })
+        foreach (string what in new[] { "village", "village-built", "dungeons", "golem-hall", "golem-hall-built", "golem-defeated", "treasure",
+                                        "temple", "castle", "pyramid", "icecave", "funpark", "mummy-defeated", "race-start", "parkour-best", "race-best",
+                                        "temple-built", "castle-built", "pyramid-built", "icecave-built", "funpark-built",
+                                        "haunted", "haunted-built", "haunted-secret", "volcano", "volcano-built", "skyislands", "skyislands-built",
+                                        "board", "board-round", "board-done", "yeti-defeated" })
             PlayerPrefs.DeleteKey(Key(slot, what));
     }
 
     public static void BuildIfMissing(BlockWorld world, int slot)
     {
         System.Random dice = new System.Random();
-        if (!PlayerPrefs.HasKey(Key(slot, "village-built"))) { PlayerPrefs.SetInt(Key(slot, "village-built"), 1); BuildVillage(world, slot, dice); }
+        // Every world gets a village - old worlds that missed out on one get another go
+        Vector3 village;
+        if (!PlayerPrefs.HasKey(Key(slot, "village-built")) || !HasVillage(slot, out village))
+        {
+            PlayerPrefs.SetInt(Key(slot, "village-built"), 1);
+            BuildVillage(world, slot, dice);
+        }
         if (!PlayerPrefs.HasKey(Key(slot, "dungeons"))) { PlayerPrefs.SetInt(Key(slot, "dungeons"), 1); BuildDungeons(world, dice); }
         if (!PlayerPrefs.HasKey(Key(slot, "golem-hall-built"))) { PlayerPrefs.SetInt(Key(slot, "golem-hall-built"), 1); BuildGolemHall(world, slot, dice); }
+        BuildMorePlaces(world, slot, dice);   // (MorePlaces.cs)
+        BuildNewPlaces(world, slot, dice);    // (NewPlaces.cs)
         PlayerPrefs.Save();
     }
 
@@ -43,7 +55,7 @@ public static class Structures
                type == BlockWorld.Sand || type == BlockWorld.Snow || type == BlockWorld.Leaves || type == BlockWorld.Wood ||
                type == BlockWorld.Gravel || type == BlockWorld.Iron || type == BlockWorld.Gold || type == BlockWorld.Diamond ||
                type == BlockWorld.Obsidian || type == BlockWorld.Water || type == BlockWorld.Lava || type == BlockWorld.Cactus ||
-               type == BlockWorld.Ice;
+               type == BlockWorld.Ice || BlockWorld.IsFlower(type);
     }
 
     static bool AllNatural(BlockWorld world, int x0, int y0, int z0, int x1, int y1, int z1)
@@ -111,47 +123,86 @@ public static class Structures
         return spot.y > 0;
     }
 
+    static bool HasVillage(int slot, out Vector3 centre)
+    {
+        Vector3Int spot = ReadSpot(Key(slot, "village"));
+        centre = new Vector3(spot.x, spot.y + 1, spot.z);
+        return spot.y > 0;
+    }
+
+    const int VillageHalf = 11;
+
+    // Somewhere for the village. Tries nice flat ground near where you start
+    // first, then anywhere in the world, then gets less and less fussy - so
+    // every world ends up with one. (It still never builds over anything you made.)
+    static bool FindVillageSpot(BlockWorld world, System.Random dice, out int bestX, out int bestZ, out int bestLevel)
+    {
+        const int half = VillageHalf;
+        Vector3 start = world.FindSpawnPoint();
+        bestX = -1; bestZ = -1; bestLevel = 0;
+
+        // (how bumpy it can be, how much of it can be water, near the start?, tries)
+        int[,] passes = { { 5, 0, 1, 60 }, { 6, 0, 0, 300 }, { 10, 10, 0, 400 }, { 16, 35, 0, 600 }, { 40, 60, 0, 800 } };
+        for (int pass = 0; pass < passes.GetLength(0); pass++)
+        {
+            int bumpy = passes[pass, 0], wetPercent = passes[pass, 1], tries = passes[pass, 3];
+            bool nearStart = passes[pass, 2] == 1;
+            int bestRange = 999;
+
+            for (int t = 0; t < tries; t++)
+            {
+                int cx, cz;
+                if (nearStart)
+                {
+                    float angle = (float)dice.NextDouble() * Mathf.PI * 2f, far = 25f + (float)dice.NextDouble() * 25f;
+                    cx = Mathf.RoundToInt(start.x + Mathf.Cos(angle) * far); cz = Mathf.RoundToInt(start.z + Mathf.Sin(angle) * far);
+                }
+                else
+                {
+                    cx = dice.Next(half + 3, BlockWorld.SizeX - half - 3); cz = dice.Next(half + 3, BlockWorld.SizeZ - half - 3);
+                }
+                if (cx - half < 2 || cz - half < 2 || cx + half >= BlockWorld.SizeX - 2 || cz + half >= BlockWorld.SizeZ - 2) continue;
+
+                int low = 999, high = -1, total = 0, count = 0, wet = 0, all = 0;
+                for (int x = cx - half; x <= cx + half; x += 2)
+                    for (int z = cz - half; z <= cz + half; z += 2)
+                    {
+                        all++;
+                        int g = GroundAt(world, x, z);
+                        if (g <= BlockWorld.SeaLevel + 1) { wet++; continue; }
+                        low = Mathf.Min(low, g); high = Mathf.Max(high, g);
+                        total += g; count++;
+                    }
+                if (count == 0 || wet * 100 > wetPercent * all || high - low > bumpy || high - low >= bestRange) continue;
+                int level = Mathf.Max(Mathf.RoundToInt((float)total / count), BlockWorld.SeaLevel + 2);
+                if (level + 12 >= BlockWorld.SizeY) continue;
+                if (!AllNatural(world, cx - half, Mathf.Max(1, level - 14), cz - half, cx + half, BlockWorld.SizeY - 1, cz + half)) continue;
+
+                bestX = cx; bestZ = cz; bestLevel = level; bestRange = high - low;
+            }
+            if (bestX >= 0) return true;
+        }
+        return false;
+    }
+
     static void BuildVillage(BlockWorld world, int slot, System.Random dice)
     {
-        const int half = 11;
-        Vector3 start = world.FindSpawnPoint();
-        int bestX = -1, bestZ = -1, bestLevel = 0, bestRange = 99;
+        const int half = VillageHalf;
+        int vx, vz, ground;
+        if (!FindVillageSpot(world, dice, out vx, out vz, out ground)) return;   // the whole world's been built on!
 
-        for (int tries = 0; tries < 60; tries++)
-        {
-            float angle = (float)dice.NextDouble() * Mathf.PI * 2f, far = 25f + (float)dice.NextDouble() * 25f;
-            int cx = Mathf.RoundToInt(start.x + Mathf.Cos(angle) * far), cz = Mathf.RoundToInt(start.z + Mathf.Sin(angle) * far);
-            if (cx - half < 2 || cz - half < 2 || cx + half >= BlockWorld.SizeX - 2 || cz + half >= BlockWorld.SizeZ - 2) continue;
-
-            int low = 999, high = -1, total = 0, count = 0;
-            bool ok = true;
-            for (int x = cx - half; x <= cx + half && ok; x += 2)
-                for (int z = cz - half; z <= cz + half && ok; z += 2)
-                {
-                    int g = GroundAt(world, x, z);
-                    if (g <= BlockWorld.SeaLevel + 1) ok = false;
-                    low = Mathf.Min(low, g); high = Mathf.Max(high, g);
-                    total += g; count++;
-                }
-            if (!ok || high - low > 5 || high - low >= bestRange) continue;
-            int level = Mathf.RoundToInt((float)total / count);
-            if (level + 10 >= BlockWorld.SizeY) continue;
-            if (!AllNatural(world, cx - half, low - 1, cz - half, cx + half, Mathf.Min(level + 10, BlockWorld.SizeY - 1), cz + half)) continue;
-
-            bestX = cx; bestZ = cz; bestLevel = level; bestRange = high - low;
-        }
-        if (bestX < 0) return;   // nowhere flat enough - no village in this world
-
-        int vx = bestX, vz = bestZ, ground = bestLevel;
-
-        // Level the ground: grass on top, and clear sky above
+        // Level the ground: fill in any dips and water, grass on top, and clear the hills and sky above
         for (int x = vx - half; x <= vx + half; x++)
             for (int z = vz - half; z <= vz + half; z++)
             {
-                for (int y = ground - 3; y < ground; y++)
-                    if (world.GetBlock(x, y, z) == BlockWorld.Air) world.SetBlock(x, y, z, BlockWorld.Dirt);
+                for (int y = Mathf.Max(1, ground - 14); y < ground; y++)
+                {
+                    byte below = world.GetBlock(x, y, z);
+                    if (below == BlockWorld.Air || below == BlockWorld.Water || below == BlockWorld.Ice || below == BlockWorld.Lava)
+                        world.SetBlock(x, y, z, BlockWorld.Dirt);
+                }
                 world.SetBlock(x, ground, z, BlockWorld.Grass);
-                for (int y = ground + 1; y <= ground + 10; y++) world.SetBlock(x, y, z, BlockWorld.Air);
+                for (int y = ground + 1; y < BlockWorld.SizeY; y++) world.SetBlock(x, y, z, BlockWorld.Air);
             }
 
         // Gravel paths in a cross, and a well in the middle
@@ -350,12 +401,80 @@ public static class Structures
 }
 
 // Keeps an eye on where you are: wakes the Stone Golem when you go into its
-// hall, and notices when you find the village
+// hall, wakes the Star Guardians when you come for the Star Crystal, and
+// notices when you find the village
 public class StructureWatcher : MonoBehaviour
 {
     private BlockWorld world;
     private float timer;
     private Golem golem;
+    private bool guardiansOut;
+    private float golemsAt;   // when the village is next allowed a new Iron Golem
+    private float guardiansBackAt;
+
+    const int Guardians = 3;
+    const float GuardiansComeBack = 180f;   // seconds after you beat them, if the crystal is still there
+
+    // In survival, three Star Guardians wake up when you get close to the
+    // Star Crystal on its shrine. Beat them all, and you've got 3 minutes
+    // to take it before they come back!
+    void WatchStarCrystal(Vector3 me)
+    {
+        if (!WorldMenu.Survival || Mods.NoMonsters) return;
+        Vector3Int crystal;
+        if (!StarShrine.ShrineCrystal(world, out crystal)) return;   // already taken - it's yours now
+
+        // Walked away? They go back to sleep (and wake up again when you come back)
+        if (guardiansOut && Vector3.Distance(me, crystal) > 40f)
+        {
+            foreach (Monster monster in Monster.All.ToArray())
+                if (monster is StarGuardian) Destroy(monster.gameObject);
+            guardiansOut = false;
+            return;
+        }
+
+        int alive = 0;
+        foreach (Monster monster in Monster.All)
+            if (monster is StarGuardian) alive++;
+
+        if (guardiansOut && alive == 0)
+        {
+            guardiansOut = false;
+            guardiansBackAt = Time.time + GuardiansComeBack;
+            PortalTraveller.Announce("You beat the Star Guardians! Quick - take the Star Crystal before they come back!");
+            return;
+        }
+
+        if (alive > 0 || Time.time < guardiansBackAt) return;
+        if (Vector3.Distance(me, crystal) > 22f) return;
+
+        for (int i = 0; i < Guardians; i++)
+        {
+            float angle = i * Mathf.PI * 2f / Guardians;
+            Vector3 spot = crystal + new Vector3(Mathf.Cos(angle) * 3f, 1f, Mathf.Sin(angle) * 3f);
+            Monster.Spawn<StarGuardian>(world, spot).Post = crystal;
+        }
+        guardiansOut = true;
+        Sounds.Thunder(crystal);
+        PortalTraveller.Announce("The STAR GUARDIANS wake up to protect the Star Crystal!");
+    }
+
+    // Two Iron Golems look after the village. If you beat one, a new one
+    // turns up after five minutes.
+    void WatchVillage(Vector3 village, Vector3 me)
+    {
+        if (Vector3.Distance(village, me) > 45f || Time.time < golemsAt) return;
+
+        int alive = 0;
+        foreach (Monster monster in Monster.All)
+            if (monster is IronGolem) alive++;
+        if (alive >= 2) return;
+
+        Vector3[] spots = { new Vector3(2f, 0.1f, 0f), new Vector3(0f, 0.1f, 2f) };
+        for (int i = alive; i < 2; i++)
+            Monster.Spawn<IronGolem>(world, village + spots[i]).Post = village;
+        golemsAt = Time.time + 300f;
+    }
 
     public static void Begin(BlockWorld world)
     {
@@ -372,8 +491,11 @@ public class StructureWatcher : MonoBehaviour
         Vector3 village;
         if (Structures.VillageCentre(out village) && Vector3.Distance(village, me) < 14f) Achievements.Unlock("village");
 
+        WatchStarCrystal(me);
+        if (Structures.VillageCentre(out village)) WatchVillage(village, me);
+
         Vector3 hall;
-        if (WorldMenu.Survival && golem == null && !Structures.GolemDefeated && Structures.GolemHall(out hall) &&
+        if (WorldMenu.Survival && !Mods.NoMonsters && golem == null && !Structures.GolemDefeated && Structures.GolemHall(out hall) &&
             Vector3.Distance(hall, me) < 11f)
         {
             golem = Monster.Spawn<Golem>(world, hall + Vector3.down * 0.5f);

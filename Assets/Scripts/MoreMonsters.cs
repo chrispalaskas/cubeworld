@@ -453,3 +453,120 @@ public class Golem : Monster
         GUI.color = before;
     }
 }
+
+// --- Star Guardians (they protect the Star Crystal - see StarCrystal.cs) ---
+
+// Glowing crystal knights that float around the Star Shrine. Come near the
+// Star Crystal and they wake up: they fly at you, bash you, and fire bolts of
+// starlight. They never leave the shrine for long, and they aren't scared of
+// the crystal - it's theirs to protect! Beat all three and it's yours.
+public class StarGuardian : Monster
+{
+    public Vector3 Post;   // the Star Crystal they're guarding
+
+    private Transform model;
+    private readonly Transform[] shards = new Transform[3];
+    private Transform leftWing, rightWing;
+    private static Material armour, gold, glow, wing;
+
+    protected override string Called { get { return "Star Guardian"; } }
+    protected override int MostHealth { get { return 24; } }
+    protected override float WalkSpeed { get { return 1.5f; } }
+    protected override float ChaseSpeed { get { return 3.2f; } }
+    protected override float NoticeRange { get { return 18f; } }
+    protected override bool Flies { get { return true; } }
+    protected override bool FireProof { get { return true; } }
+    protected override bool FearsStar { get { return false; } }
+    protected override int HitDamage { get { return 3; } }
+    protected override float HitRange { get { return 1.6f; } }
+    public override float AimHeight { get { return 0.8f; } }
+    public override float HitSize { get { return 0.8f; } }
+
+    protected override bool GuardPost(out Vector3 post) { post = Post; return true; }
+
+    // Keeps a little way off from you - but won't follow you far from the shrine
+    protected override Vector3 ChaseGoal(Vector3 player, float distance)
+    {
+        Vector3 me = transform.position;
+        if (Vector3.Distance(new Vector3(player.x, Post.y, player.z), Post) > 18f) return Post;   // you ran away - back to guarding
+        if (distance < 3f)
+        {
+            Vector3 away = me - player;
+            away.y = 0f;
+            return me + away.normalized * 2f;
+        }
+        return distance > 7f ? player : me;
+    }
+
+    protected override void Attack(PlayerHealth target, Vector3 toPlayer, float flat)
+    {
+        base.Attack(target, toPlayer, flat);   // a bash, up close
+
+        boltTimer -= Time.deltaTime;
+        if (boltTimer > 0f || flat > 16f) return;
+        Vector3 from = transform.position + Vector3.up * 0.9f + transform.forward * 0.5f;
+        Vector3 to = target.transform.position + Vector3.up;
+        if (!CanSee(from, to)) return;
+
+        boltTimer = Random.Range(1.8f, 2.6f);
+        MonsterShot.StarBolt(from, MonsterShot.Aim(from, to, 14f, false));
+        Sounds.Twang(from);
+    }
+    private float boltTimer = 1.5f;
+
+    protected override void BuildBody()
+    {
+        if (armour == null)
+        {
+            armour = BlockWorld.MakeMaterial(new Color(0.62f, 0.82f, 0.98f));
+            gold = BlockWorld.MakeMaterial(new Color(1.00f, 0.82f, 0.25f));
+            glow = BlockWorld.MakeMaterial(new Color(1.00f, 0.97f, 0.80f));
+            glow.EnableKeyword("_EMISSION");
+            glow.SetColor("_EmissionColor", new Color(1f, 0.95f, 0.7f));
+            wing = BlockWorld.MakeMaterial(new Color(0.80f, 0.93f, 1.00f));
+        }
+
+        model = Model(1.3f);
+        AddPart(model, new Vector3(0f, 0.55f, 0f), new Vector3(0.36f, 0.48f, 0.24f), armour);       // crystal armour
+        AddPart(model, new Vector3(0f, 0.6f, 0.125f), new Vector3(0.16f, 0.16f, 0.02f), gold);      // a gold star on its chest
+        AddPart(model, new Vector3(0f, 0.25f, 0f), new Vector3(0.28f, 0.16f, 0.2f), armour);        // a pointed bottom - no legs, it floats
+        AddPart(model, new Vector3(0f, 0.12f, 0f), new Vector3(0.14f, 0.12f, 0.12f), armour);
+        AddPart(model, new Vector3(-0.25f, 0.6f, 0f), new Vector3(0.1f, 0.36f, 0.12f), armour);     // arms
+        AddPart(model, new Vector3(0.25f, 0.6f, 0f), new Vector3(0.1f, 0.36f, 0.12f), armour);
+        AddPart(model, new Vector3(0f, 0.95f, 0f), new Vector3(0.28f, 0.28f, 0.28f), glow);         // a glowing star for a head
+        AddPart(model, new Vector3(0f, 1.13f, 0f), new Vector3(0.08f, 0.1f, 0.08f), gold);
+
+        leftWing = Pivot(model, new Vector3(-0.1f, 0.72f, -0.13f));
+        rightWing = Pivot(model, new Vector3(0.1f, 0.72f, -0.13f));
+        AddPart(leftWing, new Vector3(-0.3f, 0.05f, 0f), new Vector3(0.6f, 0.4f, 0.03f), wing);
+        AddPart(rightWing, new Vector3(0.3f, 0.05f, 0f), new Vector3(0.6f, 0.4f, 0.03f), wing);
+
+        for (int i = 0; i < shards.Length; i++)   // little crystals circling round it
+        {
+            shards[i] = Pivot(model, new Vector3(0f, 0.6f, 0f));
+            AddPart(shards[i], new Vector3(0.5f, 0f, 0f), new Vector3(0.08f, 0.16f, 0.08f), glow);
+        }
+
+        Light shine = gameObject.AddComponent<Light>();
+        shine.type = LightType.Point;
+        shine.color = new Color(0.7f, 0.88f, 1f);
+        shine.range = 6f;
+        shine.intensity = 1.6f;
+    }
+
+    protected override void Animate(bool walking)
+    {
+        model.localPosition = Vector3.up * Mathf.Sin(Time.time * 2f + GetInstanceID()) * 0.08f;
+        float flap = Mathf.Sin(Time.time * 6f) * 25f;
+        leftWing.localRotation = Quaternion.Euler(0f, 25f, flap);
+        rightWing.localRotation = Quaternion.Euler(0f, -25f, -flap);
+        for (int i = 0; i < shards.Length; i++)
+            shards[i].localRotation = Quaternion.Euler(0f, Time.time * 120f + i * 120f, 0f);
+    }
+
+    protected override void DropLoot()
+    {
+        Drop(BlockWorld.Diamond, Random.Range(1, 3));
+        Drop(BlockWorld.Crystal, Random.Range(2, 5));
+    }
+}

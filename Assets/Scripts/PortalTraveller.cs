@@ -34,7 +34,7 @@ public class PortalTraveller : MonoBehaviour
 
         Vector3Int under = Vector3Int.RoundToInt(transform.position + Vector3.down * 0.3f);
         byte type = world.GetBlock(under.x, under.y, under.z);
-        bool onPortal = type == BlockWorld.Portal || type == BlockWorld.MagicPortal || type == BlockWorld.FirePortal;
+        bool onPortal = type == BlockWorld.Portal || type == BlockWorld.MagicPortal || type == BlockWorld.FirePortal || type == BlockWorld.CandyPortal;
 
         if (!onPortal)
         {
@@ -48,6 +48,8 @@ public class PortalTraveller : MonoBehaviour
             WorldMenu.TravelThroughMagicPortal();
         else if (type == BlockWorld.FirePortal)
             WorldMenu.TravelThroughFirePortal();
+        else if (type == BlockWorld.CandyPortal)
+            WorldMenu.TravelThroughCandyPortal();
         else
             JumpToNextPortal(world, under);
     }

@@ -85,6 +85,28 @@ public partial class BlockInteractor
         new Recipe(BlockWorld.LeatherArmour, BlockWorld.Leather, 5),
         new Recipe(BlockWorld.IronArmour, BlockWorld.Iron, 5),
         new Recipe(BlockWorld.DiamondArmour, BlockWorld.Diamond, 5),
+
+        // Decorating
+        new Recipe(BlockWorld.StainedFirst,     BlockWorld.Glass, 1, Apple, 1),
+        new Recipe(BlockWorld.StainedFirst + 1, BlockWorld.Glass, 1, WheatItem, 1),
+        new Recipe(BlockWorld.StainedFirst + 2, BlockWorld.Glass, 1, BlockWorld.Leaves, 1),
+        new Recipe(BlockWorld.StainedFirst + 3, BlockWorld.Glass, 1, BlockWorld.Water, 1),
+        new Recipe(BlockWorld.Lantern, BlockWorld.Iron, 2, BlockWorld.Lamp, 1) { Makes = 2 },
+        new Recipe(BlockWorld.FlowerPot, BlockWorld.Brick, 3),
+        new Recipe(BlockWorld.GlowIce, BlockWorld.Ice, 1, BlockWorld.Lamp, 1) { Makes = 2 },
+        new Recipe(BlockWorld.PhotoFrame, BlockWorld.Planks, 2, BlockWorld.Glass, 1),
+        new Recipe(PaintBucket, BlockWorld.Iron, 3, BlockWorld.WoolFirst + 1, 1, BlockWorld.WoolFirst + 5, 1),
+        new Recipe(CameraItem, BlockWorld.Iron, 3, BlockWorld.Glass, 1, BlockWorld.Cable, 1),
+
+        // Fun and games
+        new Recipe(BlockWorld.Elevator, BlockWorld.Iron, 4, BlockWorld.Gold, 2, BlockWorld.Cable, 1) { Makes = 2 },
+        new Recipe(BlockWorld.Target, BlockWorld.WoolFirst, 2, BlockWorld.WoolFirst + 1, 2),
+        new Recipe(BlockWorld.StartPad, BlockWorld.Stone, 1, BlockWorld.Leaves, 2),
+        new Recipe(BlockWorld.FinishPad, BlockWorld.Stone, 1, BlockWorld.WoolFirst, 1, BlockWorld.WoolFirst + 7, 1),
+
+        // Magic
+        new Recipe(BlockWorld.Cauldron, BlockWorld.Iron, 7),
+        new Recipe(BlockWorld.EnchantTable, BlockWorld.Obsidian, 4, BlockWorld.Diamond, 2, BlockWorld.Bookshelf, 1),
         new Recipe(BlockWorld.Brick, BlockWorld.Dirt, 1, BlockWorld.Stone, 1) { Makes = 2 },
         new Recipe(BlockWorld.Tnt, BlockWorld.Sand, 4, BlockWorld.Iron, 1),
         new Recipe(BlockWorld.StairsNorth, BlockWorld.Planks, 3) { Makes = 4 },
@@ -95,6 +117,7 @@ public partial class BlockInteractor
         new Recipe(BlockWorld.DispenserNorth, BlockWorld.Stone, 7, BlockWorld.Iron, 1),
         new Recipe(BlockWorld.PressurePlate, BlockWorld.Stone, 2),
         new Recipe(BlockWorld.Timer, BlockWorld.Stone, 4, BlockWorld.Cable, 1),
+        new Recipe(BlockWorld.Observer, BlockWorld.Cobblestone, 6, BlockWorld.Cable, 2, BlockWorld.Glass, 1),
         new Recipe(BlockWorld.SignalLight, BlockWorld.Lamp, 1, BlockWorld.Cable, 1),
         new Recipe(BlockWorld.NoteBlock, BlockWorld.Planks, 8, BlockWorld.Cable, 1),
         new Recipe(BlockWorld.PistonNorth, BlockWorld.Planks, 3, BlockWorld.Stone, 4, BlockWorld.Iron, 1, BlockWorld.Cable, 1),
@@ -195,6 +218,7 @@ public partial class BlockInteractor
     bool UseUp(byte item, int howMany = 1)
     {
         if (!Survival || IsTool(item)) return true;
+        if (Mods.NeverRunOut) return HowMany(item) > 0;   // (Mods.cs)
         if (HowMany(item) < howMany) return false;
 
         int left = HowMany(item) - howMany;
@@ -259,12 +283,14 @@ public partial class BlockInteractor
             ItemDrop.Spawn(output, outputCount, at);
         }
 
-        ItemDrop.Spawn(AsItem(block), 1, at);
+        ItemDrop.Spawn(AsItem(block), Mods.DoubleDrops ? 2 : 1, at);
 
         if (block == BlockWorld.Leaves && Random.Range(0, AppleChance) == 0)
             ItemDrop.Spawn(Apple, 1, at);
         if (block == BlockWorld.Grass && Random.Range(0, SeedChance) == 0)
             ItemDrop.Spawn(Seeds, 1, at);
+        if (block == BlockWorld.Grass && Random.Range(0, 10) == 0)
+            ItemDrop.Spawn((byte)(BlockWorld.FlowerFirst + Random.Range(0, 3)), 1, at);
     }
 
     // Munch! Only if you're hungry (golden apples you can always eat)

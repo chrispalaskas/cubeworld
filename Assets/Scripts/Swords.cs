@@ -50,15 +50,17 @@ public partial class BlockInteractor
 
     // --- Swinging ---
 
-    void Swing()
+    // True if it hit something. (Missed? In creative the block in front breaks;
+    // in survival you dig it the slow way, like with your hands.)
+    bool Swing()
     {
         swingTime = SwingSeconds;
 
         MonoBehaviour animal = AnimalInSights(SwordReach(selected), true);
         if (animal == null)
         {
-            Break();
-            return;
+            if (!Survival) Break();
+            return false;
         }
 
         // Let go of the leash first if it's the animal we're holding
@@ -74,7 +76,7 @@ public partial class BlockInteractor
         {
             Sounds.Thwack(monster.transform.position);
             monster.Hit(SwordDamage(selected), transform.position);
-            return;
+            return true;
         }
 
         // Only a diamond sword is strong enough to defeat a person.
@@ -84,7 +86,7 @@ public partial class BlockInteractor
         if (dragon != null)
         {
             dragon.Startle(transform.position);
-            return;
+            return true;
         }
 
         // Unicorns are magic: no harm done, but off they gallop
@@ -92,7 +94,7 @@ public partial class BlockInteractor
         if (unicorn != null)
         {
             unicorn.Startle(transform.position);
-            return;
+            return true;
         }
 
         Villager person = animal as Villager;
@@ -102,7 +104,7 @@ public partial class BlockInteractor
                 person.Defeat();
             else
                 person.Hurt(transform.position);
-            return;
+            return true;
         }
 
         Chicken chicken = animal as Chicken;
@@ -114,9 +116,16 @@ public partial class BlockInteractor
         }
         else
             Destroy(animal.gameObject);
+        return true;
     }
 
     static int SwordDamage(byte sword)
+    {
+        if (Enchanted(sword)) return Mathf.RoundToInt(PlainSwordDamage(sword) * 1.5f) * (Mods.SuperStrength ? 3 : 1);   // magic!
+        return PlainSwordDamage(sword) * (Mods.SuperStrength ? 3 : 1);
+    }
+
+    static int PlainSwordDamage(byte sword)
     {
         if (sword == DiamondSword) return 10;
         if (sword == IronSword || sword == GoldSword) return 7;

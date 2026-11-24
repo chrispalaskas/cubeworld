@@ -45,7 +45,7 @@ public class Tnt : MonoBehaviour
         tnt.cell = cell;
         tnt.timeLeft = seconds;
         tnt.type = world.GetBlock(cell.x, cell.y, cell.z);
-        tnt.radius = tnt.type == BlockWorld.MegaTnt ? MegaBlastRadius : BlastRadius;
+        tnt.radius = (tnt.type == BlockWorld.MegaTnt ? MegaBlastRadius : BlastRadius) * (Mods.MegaExplosions ? 2 : 1);
         world.LitTnt[cell] = tnt;
     }
 

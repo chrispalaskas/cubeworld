@@ -54,6 +54,13 @@ public partial class BlockInteractor
         new Recipe(GoldSword,            BlockWorld.Gold, 2, BlockWorld.Wood, 1),
         new Recipe(DiamondSword,         BlockWorld.Diamond, 2, BlockWorld.Wood, 1),
 
+        // Magic wands, and the way to the Candy Land
+        new Recipe(SparkleWand,    BlockWorld.Wood, 1, BlockWorld.Crystal, 1, BlockWorld.Gold, 1),
+        new Recipe(IceWand,        BlockWorld.Wood, 1, BlockWorld.Ice, 2),
+        new Recipe(GrowWand,       BlockWorld.Wood, 1, BlockWorld.Leaves, 2),
+        new Recipe(FloatWand,      BlockWorld.Wood, 1, BlockWorld.Feather, 2),
+        new Recipe(BlockWorld.CandyPortal, BlockWorld.Portal, 1, BlockWorld.Snow, 2, BlockWorld.Gold, 1),
+
         // Tools: pickaxes (3 + 2 wood), axes (3 + 1 wood) and shovels (1 + 2 wood)
         new Recipe(WoodenPickaxe,  BlockWorld.Planks, 3, BlockWorld.Wood, 2),
         new Recipe(StonePickaxe,   BlockWorld.Stone, 3, BlockWorld.Wood, 2),

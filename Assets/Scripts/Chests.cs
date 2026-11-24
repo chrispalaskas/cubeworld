@@ -37,6 +37,7 @@ public partial class BlockInteractor
 
     BlockWorld.ChestContents OpenChestContents()
     {
+        if (backpackOpen) return Backpack;
         return BlockWorld.Instance.ChestAt(openChestAt);
     }
 
@@ -44,8 +45,8 @@ public partial class BlockInteractor
     {
         // Close it - or if the chest has gone (TNT!), close it for you
         if (Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(KeyCode.Escape) ||
-            Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Tab) ||
-            !BlockWorld.IsContainer(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z)))
+            Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Tab) || (backpackOpen && Input.GetKeyDown(KeyCode.B)) ||
+            (!backpackOpen && !BlockWorld.IsContainer(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z))))
         {
             CloseInventory();
             return;
@@ -160,9 +161,10 @@ public partial class BlockInteractor
         BlockWorld.ChestContents inside = OpenChestContents();
 
         GUI.Box(new Rect(0, 0, width, height), "");
-        bool dispenser = BlockWorld.IsDispenser(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
-        bool fridge = BlockWorld.IsFridge(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
+        bool dispenser = !backpackOpen && BlockWorld.IsDispenser(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
+        bool fridge = !backpackOpen && BlockWorld.IsFridge(BlockWorld.Instance.GetBlock(openChestAt.x, openChestAt.y, openChestAt.z));
         GUI.Label(new Rect(0, 8, width, 24), dispenser ? "Dispenser - press a button joined to it to shoot one out"
+                                           : backpackOpen ? "Your Backpack - it goes everywhere with you"
                                            : fridge ? "Fridge - a cool place to keep your food" : "Chest", centredLabel);
         GUI.Label(new Rect(20, 32, width - 40, 24),
                   "Holding: " + ItemNames[selected] + "   (pick a different block with 1-9, 0, or by clicking the hotbar)");

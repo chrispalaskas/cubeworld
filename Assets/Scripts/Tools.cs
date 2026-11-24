@@ -87,9 +87,10 @@ public partial class BlockInteractor
 
     float BreakTime(byte block, byte holding)
     {
+        if (Mods.InstantMining || PlayerLook.FormSmashes) return 0.01f;   // (Mods.cs, and the Stone Golem in Transform.cs)
         float time = Hardness(block);
         if (IsDiggingTool(holding) && BestToolFor(block) == KindOfTool(holding))
-            time /= TierSpeed[TierOf(holding)];
+            time /= TierSpeed[TierOf(holding)] * (Enchanted(holding) ? 1.6f : 1f);
         return time;
     }
 
@@ -214,7 +215,7 @@ public partial class BlockInteractor
     // How hard a punch is, with whatever's in your hand
     int PunchDamage()
     {
-        return IsDiggingTool(selected) ? 3 + TierOf(selected) : 2;
+        return (IsDiggingTool(selected) ? 3 + TierOf(selected) : 2) * PlayerLook.FormPunch * (Mods.SuperStrength ? 5 : 1);   // an iron golem punches hard! (Transform.cs)
     }
 
     // --- The tool in your hand ---

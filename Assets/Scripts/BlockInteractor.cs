@@ -79,7 +79,13 @@ public partial class BlockInteractor : MonoBehaviour
         BlockWorld.Cactus, BlockWorld.Trampoline, BlockWorld.SlideFirst, BlockWorld.RailNS, BlockWorld.Minecart, BlockWorld.Boat,
         BlockWorld.Bow, BlockWorld.Arrow, BlockWorld.FishingRod, BlockWorld.LeatherArmour, BlockWorld.IronArmour, BlockWorld.DiamondArmour,
         BlockWorld.Compass, BlockWorld.TreasureMap, BlockWorld.Leather, BlockWorld.Feather, BlockWorld.StringItem,
-        BlockWorld.RawBeef, BlockWorld.RawFish
+        BlockWorld.RawBeef, BlockWorld.RawFish,
+        BlockWorld.StainedFirst, BlockWorld.StainedFirst + 1, BlockWorld.StainedFirst + 2, BlockWorld.StainedFirst + 3,
+        BlockWorld.Lantern, BlockWorld.FlowerFirst, BlockWorld.FlowerFirst + 1, BlockWorld.FlowerFirst + 2, BlockWorld.FlowerPot,
+        BlockWorld.Elevator, BlockWorld.Target, BlockWorld.StartPad, BlockWorld.FinishPad, BlockWorld.GlowIce,
+        BlockWorld.Cauldron, BlockWorld.EnchantTable, BlockWorld.PhotoFrame, CameraItem, PaintBucket, BuilderWand,
+        SparkleWand, IceWand, GrowWand, FloatWand, SpeedPotion, JumpPotion, InvisibilityPotion, BreathingPotion,
+        BlockWorld.Observer, BlockWorld.FireflyJar, BlockWorld.CandyPortal, BlockWorld.CandyGrass, BlockWorld.Chocolate, BlockWorld.Lollipop, BlockWorld.CandyCane, BlockWorld.CottonCandy
     };
     // The inventory works out how many columns to use so it fits your screen
     // (see DrawInventory), and scrolls if it really can't fit
@@ -122,10 +128,15 @@ public partial class BlockInteractor : MonoBehaviour
         "Seeds", "Wheat", "Bread", "Cooked Chicken",
         "Stone Slab", "Plank Slab", "Fence", "Ladder", "", "", "", "Sign", "", "", "",
         "White Wool", "Red Wool", "Orange Wool", "Yellow Wool", "Green Wool", "Blue Wool", "Purple Wool", "Black Wool",
-        "Cactus", "Trampoline", "Slide", "", "", "", "Rails", "Rails", "Monster Cage", "",
+        "Cactus", "Trampoline", "Slide", "", "", "", "Rails", "Rails", "Monster Cage", "Firefly Jar",
         "Raw Beef", "Steak", "Raw Pork", "Cooked Pork", "Raw Fish", "Cooked Fish", "Leather", "Feather", "String",
         "Fishing Rod", "Bow", "Arrow", "Leather Armour", "Iron Armour", "Diamond Armour", "Treasure Map", "Compass",
-        "Minecart", "Boat"
+        "Minecart", "Boat",
+        "Red Glass", "Yellow Glass", "Green Glass", "Blue Glass", "Lantern", "Red Flower", "Yellow Flower", "Blue Flower", "Flower Pot",
+        "Elevator", "Target", "Start Pad", "Finish Pad", "Glowing Ice", "Cauldron", "Enchanting Table", "Photo Frame",
+        "Candy Grass", "Chocolate", "Melted Chocolate", "Lollipop", "Candy Cane", "Cotton Candy", "Candy Portal",
+        "Sparkle Wand", "Ice Wand", "Growing Wand", "Floating Wand", "Paint Bucket", "Builder's Wand", "Observer",
+        "Speed Potion", "Jumping Potion", "Invisibility Potion", "Water Breathing Potion", "Camera"
     };
 
     // While the inventory is open, other scripts leave the keys and mouse alone.
@@ -173,16 +184,19 @@ public partial class BlockInteractor : MonoBehaviour
 
     void Update()
     {
-        if (Tutorial.IsOpen) return;   // the game waits while you watch the tutorial
+        if (Tutorial.IsOpen || PlayerLook.Dressing || Mods.ScreenOpen) return;   // the game waits while you watch the tutorial, or dress up
         RunMachines();   // timers and pressure plates (Machines.cs)
         ChooseBlock();
         MoveHand();
+        RemindAboutArmour();   // (Gear.cs)
 
         if (PlayerHealth.Instance != null && PlayerHealth.Instance.Dead) return;   // no building while you're knocked out
 
         if (InventoryOpen)
         {
             if (writingSign) { }   // the typing is all done in DrawSignWriting
+            else if (talking) TalkKeys();
+            else if (readingBoard) BoardKeys();
             else if (crafting) CraftingKeys();
             else if (chestOpen) ChestKeys();
             else InventoryKeys();
@@ -197,9 +211,17 @@ public partial class BlockInteractor : MonoBehaviour
             OpenInventory();
             return;
         }
+        if (Input.GetKeyDown(KeyCode.B))
+        {
+            OpenBackpack();   // (Backpack.cs)
+            return;
+        }
 
         Dragon riddenDragon = GetComponent<FirstPersonPlayer>().RidingOn as Dragon;
-        bool usesHands = riddenDragon == null && selected != Sponge && selected != Leash && !IsSword(selected) && selected != BlockWorld.Bow;
+        bool aimingBow = selected == BlockWorld.Bow || (selected == BlockWorld.Arrow && HasBow()) ||   // holding the arrows works too
+                         (PlayerLook.FormShoots && (selected == BlockWorld.Air || selected == BlockWorld.Arrow));   // a skeleton needs no bow (Transform.cs)
+        bool usesHands = riddenDragon == null && selected != Sponge && selected != Leash && !aimingBow &&
+                         !IsWand(selected) && selected != PaintBucket && selected != BuilderWand && selected != CameraItem;
         Vehicle clickedVehicle;
 
         if (Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Q))
@@ -215,10 +237,16 @@ public partial class BlockInteractor : MonoBehaviour
                 PickUpVehicle(clickedVehicle);   // a boat or minecart back into your pocket
                 waitForLetGo = true;
             }
-            else if (selected == BlockWorld.Bow)
+            else if (aimingBow)
                 ShootArrow();
+            else if (selected == BlockWorld.Arrow)
+                PortalTraveller.Announce("You need a bow to shoot arrows! Make one: wood and string.");
+            else if (UseMagic())
+                waitForLetGo = true;   // wands, paint, the builder's wand, the camera (Magic.cs)
             else if (IsSword(selected))
-                Swing();
+            {
+                if (Swing()) waitForLetGo = true;   // hit something - no digging till you let go
+            }
             else if (Survival && Punch())
                 waitForLetGo = true;   // bonk - a monster or a chicken (and no digging till you let go)
             else if (!Survival)
@@ -241,10 +269,15 @@ public partial class BlockInteractor : MonoBehaviour
             Vector3Int sign;
             Vehicle ride;
             Monster critter;
+            Villager person;
+            Vector3Int magicBlock;
+            byte magicType;
             MonoBehaviour mount;
             FirstPersonPlayer me = GetComponent<FirstPersonPlayer>();
 
-            if (me.InVehicle != null)
+            if (me.InVehicle is Balloon && !((Balloon)me.InVehicle).SafeToLeave(transform.right))
+                PortalTraveller.Announce("It's a long way down! Hold Left Ctrl to float down first (or get right next to a sky island).");
+            else if (me.InVehicle != null)
                 me.LeaveVehicle();   // out of the boat or minecart
             else if (me.IsRiding)
                 me.Dismount();   // E again gets you off
@@ -261,8 +294,14 @@ public partial class BlockInteractor : MonoBehaviour
                 me.Board(ride);
             else if (LookingAtCritter(out critter) && critter.Interact(selected))
                 squeezeTime = 0.15f;   // shearing, taming, patting...
+            else if (LookingAtVillager(out person))
+                StartTalking(person);   // quests and trading (Trading.cs)
+            else if (LookingAtMagicBlock(out magicBlock, out magicType))
+                UseMagicBlock(magicBlock, magicType);   // cauldrons and enchanting (Magic.cs)
             else if (LookingAtCraftingTable())
                 OpenCrafting();
+            else if (LookingAtSign(out sign) && Structures.IsQuestBoard(BlockWorld.Instance, sign))
+                OpenBoard();   // jobs to do (QuestBoard.cs)
             else if (LookingAtSign(out sign) && selected != BlockWorld.SignFirst)
                 StartWritingSign(sign);
             else if (LookingAtChest(out chest))
@@ -404,7 +443,7 @@ public partial class BlockInteractor : MonoBehaviour
 
             byte type = BlockWorld.Instance.GetBlock(lava.x, lava.y, lava.z);
             if (type == BlockWorld.Lava || type == BlockWorld.Fire || type == BlockWorld.Cable || type == BlockWorld.PressurePlate ||
-                BlockWorld.IsWheat(type) || BlockWorld.IsRail(type))
+                BlockWorld.IsWheat(type) || BlockWorld.IsRail(type) || BlockWorld.IsFlower(type))
                 return true;   // cable, pressure plates, wheat and rails too - they're not solid
             if (type != BlockWorld.Air && type != BlockWorld.Water) return false;
         }
@@ -461,7 +500,9 @@ public partial class BlockInteractor : MonoBehaviour
             return;
         }
         if (Survival && !HaveGot(selected)) return;
+        if (CatchFireflies()) return;   // holding glass at a swarm (Fireflies.cs)
         if (UseGear()) return;   // bows, rods, armour, boats... (Gear.cs)
+        if (UseMagicE()) return;   // potions, pasting (Magic.cs)
 
         byte holding = selected;
         if (PlaceSelected()) UseUp(holding);
@@ -471,7 +512,8 @@ public partial class BlockInteractor : MonoBehaviour
     static bool NotPlaceable(byte item)
     {
         return item == BlockWorld.Air || item == Sponge || item == Leash || IsSword(item) || item == Wings ||
-               IsDiggingTool(item) || item == WheatItem || (item >= BlockWorld.RawBeef && item <= BlockWorld.Boat);
+               IsDiggingTool(item) || item == WheatItem || (item >= BlockWorld.RawBeef && item <= BlockWorld.Boat) ||
+               (item >= SparkleWand && item <= CameraItem && item != BlockWorld.Observer);   // (the observer sits among the magic things)
     }
 
     // True if something was placed (or hatched, or launched...)
@@ -560,8 +602,10 @@ public partial class BlockInteractor : MonoBehaviour
                    : selected == BlockWorld.ConveyorNorth ? FacingAway(BlockWorld.ConveyorNorth)
                    : BlockWorld.IsFurniture(selected) ? FurnitureFacingMe(selected)
                    : TurnedFor(selected, target);
+        if (block == BlockWorld.Observer) BlockWorld.Instance.SetObserverFacing(target, ObserverFacing());   // it watches the way you're looking
         BlockWorld.Instance.SetBlock(target.x, target.y, target.z, block);
         Sounds.Place(block, target);
+        if (block == BlockWorld.PhotoFrame) HangLatestPhoto(target);
 
         if (selected == BlockWorld.Tnt)
             Tnt.Ignite(BlockWorld.Instance, target, Tnt.FuseSeconds);
@@ -652,6 +696,10 @@ public partial class BlockInteractor : MonoBehaviour
         InventoryOpen = false;
         crafting = false;
         pocketCrafting = false;
+        talking = false;
+        readingBoard = false;
+        if (backpackOpen) SaveBackpack();
+        backpackOpen = false;
         chestOpen = false;
         InventoryClosedFrame = Time.frameCount;
         Cursor.lockState = CursorLockMode.Locked;
@@ -781,7 +829,7 @@ public partial class BlockInteractor : MonoBehaviour
     // A unicorn or dragon close enough to climb on
     bool LookingAtRideable(out MonoBehaviour mount)
     {
-        mount = AnimalInSights(5f);
+        mount = AnimalInSights(5f, true);   // (camels are counted with the other animals)
         if (!(mount is IRideable)) mount = null;
         return mount != null;
     }
@@ -935,15 +983,19 @@ public partial class BlockInteractor : MonoBehaviour
 
         GUI.Label(new Rect(12, 10, 800, 24), "WASD move   Arrows or mouse look   Space jump / swim up");
         GUI.Label(new Rect(12, 30, 800, 24), "Q or left click: break / wipe water / leash / swing sword   E or right click: place / open door   Esc frees mouse, Enter returns");
-        GUI.Label(new Rect(12, 50, 800, 24), "1-9, 0 or mouse wheel: choose from the hotbar     H: how to play (watch the tutorial)");
+        GUI.Label(new Rect(12, 50, 800, 24), "1-9, 0 or mouse wheel: choose from the hotbar     H: how to play (watch the tutorial)     G: go to the Golem Hall     J: go to the village     P: the pyramid");
 
+        GUI.Label(new Rect(12, 90, 900, 24), "O: mods   B: backpack   K: dress up   V: see yourself   F1/F2/F3: wave, dance, cheer   E on a villager: quests and trading");
         GUI.Label(new Rect(12, 70, 800, 24), "I or Tab: inventory   E or right click on a crafting table or chest: open it   E on a unicorn or dragon: ride (Space flies)");
         if (Survival)
-            GUI.Label(new Rect(12, 90, 900, 24), "Survival: break blocks to collect them, craft the rest (place your crafting table, then turn Wood into Planks). No table? Press C in your inventory. Hold food and press E to eat. Left click a monster to fight it!");
+            GUI.Label(new Rect(12, 110, 900, 24), "Survival: break blocks to collect them, craft the rest (place your crafting table, then turn Wood into Planks). No table? Press C in your inventory. Hold food and press E to eat. Left click a monster to fight it!");
 
         DrawSleep();
         DrawGearHud();
-        if (InventoryOpen && writingSign) DrawSignWriting();
+        DrawMagicHud();
+        if (InventoryOpen && talking) DrawTalking();
+        else if (InventoryOpen && readingBoard) DrawBoard();
+        else if (InventoryOpen && writingSign) DrawSignWriting();
         else if (InventoryOpen && crafting) DrawCrafting();
         else if (InventoryOpen && chestOpen) DrawChest();
         else if (InventoryOpen) DrawInventory();
@@ -979,6 +1031,12 @@ public partial class BlockInteractor : MonoBehaviour
             GUI.DrawTexture(icon, look.mainTexture != null ? look.mainTexture : Texture2D.whiteTexture);
         }
 
+        // A little purple sparkle in the corner if it's enchanted
+        if (Enchanted(item))
+        {
+            GUI.color = new Color(0.8f, 0.5f, 1f, 0.6f + 0.4f * Mathf.Sin(Time.time * 5f));
+            GUI.DrawTexture(new Rect(icon.xMax - icon.width * 0.35f, icon.y, icon.width * 0.35f, icon.height * 0.35f), Texture2D.whiteTexture);
+        }
         GUI.color = before;
     }
 
@@ -993,6 +1051,8 @@ public partial class BlockInteractor : MonoBehaviour
         if (item == RainbowArch) return RainbowPicture();
         if (item == Wings) return WingsPicture();
         if (BlockWorld.IsFurniture(item)) return FurniturePicture(BlockWorld.FurnitureItem(item));
+        Texture2D magic = MagicPicture(item);   // (Magic.cs)
+        if (magic != null) return magic;
         Texture2D gear = GearPicture(item);   // (Gear.cs)
         if (gear != null) return gear;
         if (IsFood(item)) return FoodPicture(item);

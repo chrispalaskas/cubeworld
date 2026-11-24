@@ -280,6 +280,12 @@ public class Tutorial : MonoBehaviour
                 "Find the village, explore dungeons, and follow treasure maps to the red X.",
                 "Climb the highest mountain for the Star Crystal - and dare to face the Stone Golem deep below!"
             }},
+            new Page { title = "Even more to discover", picture = Worlds, words = new[]
+            {
+                "Press E on a villager for quests and trading - earn coins and buy rare things.",
+                "Brew potions in a cauldron, enchant your sword, wave magic wands, and take photos with a camera.",
+                "Find the sky castle, the underwater temple, the pyramid, the ice caves - and the Candy Land!"
+            }},
             new Page { title = "You're ready!", picture = Ready, words = new[]
             {
                 "Achievements pop up when you do something for the first time - try to get them all!",

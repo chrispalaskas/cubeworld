@@ -395,6 +395,7 @@ public class AnimalHerd : MonoBehaviour
         foreach (string pet in Pets.Load())
         {
             Vector3 spot = player + new Vector3(Random.Range(-2f, 2f), 0.5f, Random.Range(-2f, 2f));
+            if (pet == "owl") { Monster.Spawn<Owl>(world, spot).Tamed = true; continue; }
             Pet made = pet == "dog" ? (Pet)Monster.Spawn<Dog>(world, spot) : Monster.Spawn<Cat>(world, spot);
             made.Tamed = true;
         }
@@ -413,7 +414,7 @@ public class AnimalHerd : MonoBehaviour
 
     void FillUp()
     {
-        int cows = 0, sheep = 0, pigs = 0, dogs = 0, cats = 0;
+        int cows = 0, sheep = 0, pigs = 0, dogs = 0, cats = 0, penguins = 0, camels = 0, parrots = 0, owls = 0;
         foreach (Monster animal in Monster.All)
         {
             if (animal is Cow) cows++;
@@ -421,15 +422,38 @@ public class AnimalHerd : MonoBehaviour
             else if (animal is Pig) pigs++;
             else if (animal is Dog && !((Pet)animal).Tamed) dogs++;
             else if (animal is Cat && !((Pet)animal).Tamed) cats++;
+            else if (animal is Penguin) penguins++;
+            else if (animal is Camel) camels++;
+            else if (animal is Parrot) parrots++;
+            else if (animal is Owl && !((Owl)animal).Tamed) owls++;
         }
         for (; cows < 5; cows++) Place<Cow>();
         for (; sheep < 5; sheep++) Place<Sheep>();
         for (; pigs < 4; pigs++) Place<Pig>();
         for (; dogs < 2; dogs++) Place<Dog>();
         for (; cats < 2; cats++) Place<Cat>();
+
+        // Penguins on the snow and ice, camels in the desert, parrots up in the jungle trees
+        for (; penguins < 4; penguins++) PlaceOn<Penguin>(t => t == BlockWorld.Snow || t == BlockWorld.Ice, 0.5f);
+        for (; camels < 3; camels++) PlaceOn<Camel>(t => t == BlockWorld.Sand, 0.5f, BlockWorld.SeaLevel + 3);
+        for (; owls < 3; owls++) PlaceOn<Owl>(t => t == BlockWorld.Leaves, 1.2f, BlockWorld.SeaLevel + 5);   // owls up in the treetops
+        for (; parrots < 4; parrots++) PlaceOn<Parrot>(t => t == BlockWorld.Leaves, 1.5f, BlockWorld.SeaLevel + 8);
     }
 
     // Somewhere grassy
+    // Somewhere the ground (the very top block) is right for it - if there is anywhere
+    void PlaceOn<T>(System.Func<byte, bool> ground, float above, int lowest = 0) where T : Monster
+    {
+        for (int tries = 0; tries < 60; tries++)
+        {
+            int x = Random.Range(4, BlockWorld.SizeX - 4), z = Random.Range(4, BlockWorld.SizeZ - 4);
+            int y = world.GetSurfaceHeight(x, z);
+            if (y < lowest || !ground(world.GetBlock(x, y, z))) continue;
+            Monster.Spawn<T>(world, new Vector3(x, y + above, z));
+            return;
+        }
+    }
+
     void Place<T>() where T : Monster
     {
         for (int tries = 0; tries < 30; tries++)
@@ -463,8 +487,22 @@ public class FishSchool : MonoBehaviour
 
         Vector3 me = BlockInteractor.Me.transform.position;
         foreach (Transform fish in transform)
-            if (Vector3.Distance(fish.position, me) > 40f) Destroy(fish.gameObject);
-        if (transform.childCount >= 12) return;
+            if (Vector3.Distance(fish.position, me) > 50f) Destroy(fish.gameObject);
+        // A whale or two, out in the deep sea
+        int whales = 0;
+        foreach (Transform swimmer in transform) if (swimmer.GetComponent<Whale>() != null) whales++;
+        if (whales < 2)
+        {
+            Vector3Int sea = Vector3Int.RoundToInt(me + new Vector3(Random.Range(-35f, 35f), 0f, Random.Range(-35f, 35f)));
+            sea.y = BlockWorld.SeaLevel;
+            bool deep = true;
+            for (int d = 0; d <= 4 && deep; d++)
+                if (world.GetBlock(sea.x, sea.y - d, sea.z) != BlockWorld.Water || world.GetBlock(sea.x + 3, sea.y - d, sea.z) != BlockWorld.Water ||
+                    world.GetBlock(sea.x, sea.y - d, sea.z + 3) != BlockWorld.Water) deep = false;
+            if (deep) Whale.Make(world, new Vector3(sea.x, sea.y - 0.4f, sea.z), transform);
+        }
+
+        if (transform.childCount >= 14) return;
 
         if (colours == null)
             colours = new[] { BlockWorld.MakeMaterial(new Color(1f, 0.55f, 0.15f)), BlockWorld.MakeMaterial(new Color(0.3f, 0.6f, 0.95f)),

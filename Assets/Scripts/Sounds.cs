@@ -28,7 +28,7 @@ public static class Sounds
         if (BlockWorld.IsRail(block) || block == BlockWorld.Spawner || BlockWorld.IsSlide(block)) return Kind.Metal;
         if (block == BlockWorld.PlankSlab || block == BlockWorld.Fence || BlockWorld.IsLadder(block) || BlockWorld.IsSign(block)) return Kind.Wood;
         if (block == BlockWorld.Leaves || BlockWorld.IsWheat(block) || block == BlockWorld.Rug) return Kind.Leaves;
-        if (block == BlockWorld.Glass || block == BlockWorld.Ice || block == BlockWorld.Crystal || block == BlockWorld.Lamp ||
+        if (block == BlockWorld.Glass || block == BlockWorld.FireflyJar || block == BlockWorld.Ice || block == BlockWorld.Crystal || block == BlockWorld.Lamp ||
             block == BlockWorld.FireCrystal || block == BlockWorld.StarCrystal || block == BlockWorld.Window) return Kind.Glass;
         if (block == BlockWorld.Iron || block == BlockWorld.Gold || block == BlockWorld.Diamond || block == BlockWorld.Cable ||
             BlockWorld.IsPiston(block) || block == BlockWorld.Sink || block == BlockWorld.Fridge) return Kind.Metal;
@@ -72,9 +72,35 @@ public static class Sounds
 
     // "zombie", "skeleton", "spider", "slime" or "fire imp"
     public static void Monster(string who, Vector3 at) { Play("monster " + who, at, 0.6f); }
+    public static void Boing(Vector3 at)   { Play("boing", at, 0.6f); }
+    public static void Hoot(Vector3 at)    { Play("monster owl", at, 0.7f); }
+    public static void Rumble(Vector3 at)  { Play("rumble", at, 1f); }
+
+    // The last sound - parrots listen for it and copy it
+    public static string LastName { get; private set; }
+    public static Vector3 LastAt { get; private set; }
+    public static float LastTime { get; private set; }
+    public static bool LastWasParrot { get; private set; }
+
+    // A parrot copying a sound it heard (a little higher - it's a parrot!)
+    public static void Copy(string name, Vector3 at)
+    {
+        LastWasParrot = true;
+        Play(name, at, 0.5f, true);
+        LastWasParrot = true;
+    }
 
     static void Play(string name, Vector3 at, float volume)
     {
+        LastWasParrot = false;
+        Play(name, at, volume, false);
+    }
+
+    static void Play(string name, Vector3 at, float volume, bool parrot)
+    {
+        LastName = name;
+        LastAt = at;
+        LastTime = Time.time;
         AudioClip[] clips;
         if (!made.TryGetValue(name, out clips) || clips[0] == null)
         {
@@ -82,7 +108,23 @@ public static class Sounds
             for (int i = 0; i < clips.Length; i++) clips[i] = Make(name, i);
             made[name] = clips;
         }
-        AudioSource.PlayClipAtPoint(clips[Random.Range(0, clips.Length)], at, volume);
+        AudioClip clip = clips[Random.Range(0, clips.Length)];
+        if (!parrot)
+        {
+            AudioSource.PlayClipAtPoint(clip, at, volume);
+            return;
+        }
+
+        // A parrot's copy is squeakier
+        GameObject squawk = new GameObject("Parrot Sound");
+        squawk.transform.position = at;
+        AudioSource source = squawk.AddComponent<AudioSource>();
+        source.clip = clip;
+        source.pitch = 1.5f;
+        source.volume = volume;
+        source.spatialBlend = 1f;
+        source.Play();
+        Object.Destroy(squawk, clip.length / source.pitch + 0.1f);
     }
 
     // --- Making them ---
@@ -105,6 +147,11 @@ public static class Sounds
             case "thunder": return Build(name, 2.5f, dice, t => Noise(dice, 0.03f) * (Fade(t, 1.5f) + Fade(Mathf.Abs(t - 0.4f), 6f)) * 3f);
             case "whoosh": return Build(name, 0.4f, dice, t => Noise(dice, 0.2f) * Mathf.Sin(Mathf.PI * t / 0.4f));
 
+            case "boing":  return Build(name, 0.35f, dice, t => Tone(Mathf.Lerp(180f, 520f, t / 0.35f) * wobble + Mathf.Sin(t * 60f) * 30f, t) * Fade(t, 7f) * 0.6f);
+            case "rumble": return Build(name, 2.2f, dice, t => Noise(dice, 0.02f) * Mathf.Sin(Mathf.PI * t / 2.2f) * 2.5f);
+            case "monster owl":   return Build(name, 0.9f, dice, t => Tone(t < 0.35f ? 420f : 360f, t) * (t < 0.3f ? Mathf.Sin(Mathf.PI * t / 0.3f) : t > 0.4f ? Mathf.Sin(Mathf.PI * (t - 0.4f) / 0.5f) : 0f) * 0.5f);
+            case "monster yeti":  return Build(name, 1.1f, dice, t => (Square(70f * wobble + Mathf.Sin(t * 12f) * 10f, t) * 0.4f + Noise(dice, 0.3f) * 0.5f) * Mathf.Sin(Mathf.PI * t / 1.1f) * 0.8f);
+            case "monster mimic": return Build(name, 0.3f, dice, t => (Noise(dice, 0.5f) * 0.7f + Tone(140f, t) * 0.5f) * Bursts(t, 2, 0.14f, 30f));
             case "monster zombie":   return Build(name, 0.9f, dice, t => Square(95f * wobble + Mathf.Sin(t * 9f) * 8f, t) * Mathf.Sin(Mathf.PI * t / 0.9f) * 0.35f);
             case "monster skeleton": return Build(name, 0.5f, dice, t => Noise(dice, 0.6f) * Bursts(t, 6, 0.08f, 60f) * 0.8f);
             case "monster spider":   return Build(name, 0.5f, dice, t => Noise(dice, 0.75f) * Mathf.Sin(Mathf.PI * t / 0.5f) * 0.6f);

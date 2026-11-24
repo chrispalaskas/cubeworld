@@ -64,7 +64,7 @@ public partial class BlockWorld
     public static bool IsModel(byte type)
     {
         return IsSlab(type) || type == Fence || IsLadder(type) || IsSign(type) || type == Cactus ||
-               IsSlide(type) || IsRail(type) || type == Spawner;
+               IsSlide(type) || IsRail(type) || type == Spawner || IsExtraModel(type);
     }
 
     // Which way a ladder, sign or slide faces (0 north, 1 east, 2 south, 3 west)
@@ -138,6 +138,8 @@ public partial class BlockWorld
 
     void BuildModel(GameObject cube, int x, int y, int z, byte type)
     {
+        if (IsExtraModel(type)) { BuildExtraModel(cube, x, y, z, type); return; }   // (Extras.cs)
+
         cube.transform.localRotation = Quaternion.LookRotation(Direction(ModelFacing(type)));
 
         if (IsSlab(type))
@@ -332,6 +334,6 @@ public partial class BlockWorld
     {
         if (type == Spawner) spawners.Add(cell);
         else spawners.Remove(cell);
-        if (!IsSign(type)) signTexts.Remove(cell);
+        if (!IsSign(type) && type != PhotoFrame) signTexts.Remove(cell);
     }
 }

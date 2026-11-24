@@ -73,6 +73,7 @@ public abstract class Vehicle : MonoBehaviour
             Vector3 at = new Vector3(x, y, z);
             if (bits[0] == "boat") BoatRide.Launch(world, at);
             else if (bits[0] == "cart") Cart.PutOn(world, Vector3Int.RoundToInt(at + Vector3.up * 0.35f));
+            else if (bits[0] == "balloon") Balloon.Make(world, at);
         }
     }
 

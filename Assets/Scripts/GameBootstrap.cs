@@ -59,6 +59,10 @@ public class GameBootstrap : MonoBehaviour
         player.AddComponent<PortalTraveller>();
         if (WorldMenu.Survival) player.AddComponent<PlayerHealth>();
         player.AddComponent<Minimap>();
+        player.AddComponent<PlayerLook>();
+
+        ModEffects.Begin();
+        PowerUser.Begin();   // your own powers (Powers.cs)   // fireworks, chicken rain and so on (Mods.cs)
 
         // --- The wildlife ---
         Squirrel.SpawnAll(world);
@@ -75,9 +79,15 @@ public class GameBootstrap : MonoBehaviour
             Weather.Begin(world);
             AnimalHerd.Begin(world, position);
             StructureWatcher.Begin(world);
+            MiniGames.Begin(world);
+            NewPlacesWatcher.Begin(world);
+            FireflySwarms.Begin(world);
+            JellySwarm.Begin(world);
+            MeteorShower.Begin(world);
         }
         Vehicle.LoadAll(world);
-        if (WorldMenu.Survival && WorldMenu.CurrentPlace != WorldSaves.MagicLand) Monster.BeginSpawning(world);
+        if (WorldMenu.Survival && WorldMenu.CurrentPlace != WorldSaves.MagicLand && WorldMenu.CurrentPlace != WorldSaves.CandyLand)
+            Monster.BeginSpawning(world);   // (the Magic Land and the Candy Land are far too nice for monsters)
 
         return walker;
     }
@@ -111,6 +121,16 @@ public class GameBootstrap : MonoBehaviour
         DestroyAll<FishSchool>();
         DestroyAll<StructureWatcher>();
         DestroyAll<Vehicle>();
+        DestroyAll<MiniGames>();
+        DestroyAll<ModEffects>();
+        DestroyAll<PowerUser>();
+        DestroyAll<NewPlacesWatcher>();
+        DestroyAll<FireflySwarms>();
+        DestroyAll<JellySwarm>();
+        DestroyAll<Jellyfish>();
+        DestroyAll<MeteorShower>();
+        DestroyAll<FallingMeteor>();
+        Effects.Clear();
         DestroyAll<FirstPersonPlayer>();
         DestroyAll<BlockWorld>();
     }

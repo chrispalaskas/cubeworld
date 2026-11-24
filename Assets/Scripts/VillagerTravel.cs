@@ -176,6 +176,7 @@ public partial class Villager
     }
 
     public bool IsOnLeash { get { return holder != null; } }
+    public string Name { get { return villagerName; } }
 
     // The closest magic portal in this world that you could stand on
     public static bool FindNearestMagicPortal(BlockWorld world, Vector3 near, out Vector3Int found)

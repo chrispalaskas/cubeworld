@@ -8,11 +8,15 @@ using UnityEngine;
 // shining a beam of starlight high into the sky (so you can spot the
 // mountain from far away). Next to it is a treasure chest.
 //
+// In survival it's guarded! Three Star Guardians - glowing crystal knights -
+// wake up when you get close, and fight to protect it (see MoreMonsters.cs).
+// Beat them all and you've got 3 minutes to grab it before they come back.
+//
 // There's only one Star Crystal in each world. Break it to take it with you,
 // and put it wherever you like - your house, say:
 //   - it glows, twinkles, and shines its beam wherever it goes
 //   - in survival, standing near it slowly heals your hearts
-//   - zombies are scared of it and won't come close
+//   - monsters are scared of it and won't come close
 //
 // Every world gets its shrine the first time you visit after this was
 // added - even old worlds.
@@ -27,8 +31,35 @@ public static class StarShrine
     }
 
     // Builds the shrine in this world, if it hasn't had one yet
+    private static int buildingFor;
+    static string SpotKey(int slot) { return "world" + (slot + 1) + "-star-shrine-spot"; }
+
+    // Where the Star Crystal sits on its shrine - if it's still there.
+    // (Worlds from before this was remembered: a Star Crystal on a gold stand is the one.)
+    public static bool ShrineCrystal(BlockWorld world, out Vector3Int spot)
+    {
+        spot = new Vector3Int(-1, -1, -1);
+        int slot = WorldMenu.CurrentSlot;
+        string[] bits = PlayerPrefs.GetString(SpotKey(slot), "").Split(',');
+        int x, y, z;
+        if (bits.Length == 3 && int.TryParse(bits[0], out x) && int.TryParse(bits[1], out y) && int.TryParse(bits[2], out z))
+            spot = new Vector3Int(x, y, z);
+        else
+        {
+            foreach (Vector3Int cell in world.StarCrystals)
+                if (world.GetBlock(cell.x, cell.y - 1, cell.z) == BlockWorld.Gold)
+                {
+                    spot = cell;
+                    PlayerPrefs.SetString(SpotKey(slot), cell.x + "," + cell.y + "," + cell.z);
+                    break;
+                }
+        }
+        return spot.y > 0 && world.GetBlock(spot.x, spot.y, spot.z) == BlockWorld.StarCrystal;
+    }
+
     public static void BuildIfMissing(BlockWorld world, int slot)
     {
+        buildingFor = slot;
         if (PlayerPrefs.HasKey(Key(slot))) return;
         PlayerPrefs.SetInt(Key(slot), 1);
         PlayerPrefs.Save();
@@ -41,6 +72,7 @@ public static class StarShrine
     public static void Forget(int slot)
     {
         PlayerPrefs.DeleteKey(Key(slot));
+        PlayerPrefs.DeleteKey(SpotKey(slot));
     }
 
     // The highest bit of natural ground (not trees), away from the edges
@@ -95,6 +127,7 @@ public static class StarShrine
         // The Star Crystal, on a little gold stand
         world.SetBlock(px, h + 1, pz, BlockWorld.Gold);
         world.SetBlock(px, h + 2, pz, BlockWorld.StarCrystal);
+        PlayerPrefs.SetString(SpotKey(WorldMenu.CurrentSlot < 0 ? buildingFor : WorldMenu.CurrentSlot), px + "," + (h + 2) + "," + pz);
 
         // And a treasure chest beside it
         Vector3Int chest = new Vector3Int(px, h + 1, pz + 1);

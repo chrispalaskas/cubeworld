@@ -75,10 +75,33 @@ public abstract class Monster : MonoBehaviour
     // Defeated - slimes split up, the rest just go poof
     protected virtual void OnDefeated() { }
 
+    // Just been hit (mimics wake up!)
+    protected virtual void OnHit() { }
+
     // What it leaves behind in survival (spiders drop string, cows drop beef...)
     protected virtual void DropLoot() { }
 
     // --- Friendly animals (cows, sheep, pigs, dogs and cats - see Animals.cs) ---
+
+    // Something riding it - it stays still and lets them steer (camels)
+    protected virtual bool Frozen { get { return false; } }
+
+    // Ghosts float right through walls
+    protected virtual bool PassesThroughWalls { get { return false; } }
+
+    // Frozen solid by a power (Powers.cs) - it can't move for a few seconds
+    private float iceUntil;
+    public void FreezeFor(float seconds) { iceUntil = Time.time + seconds; }
+
+    // The Floating Wand: up it goes, for a few seconds
+    private float floatUntil;
+    public void Float(float seconds) { floatUntil = Time.time + seconds; }
+
+    // Most monsters are scared of the Star Crystal - but not the ones guarding it!
+    protected virtual bool FearsStar { get { return true; } }
+
+    // Somewhere it has to stay near (for guards)
+    protected virtual bool GuardPost(out Vector3 post) { post = Vector3.zero; return false; }
 
     // Bad creatures come after you. Animals just wander about, and run away when hit.
     public virtual bool Hostile { get { return true; } }
@@ -146,6 +169,23 @@ public abstract class Monster : MonoBehaviour
         // Monsters wait while you're in your inventory, or paused
         if (BlockInteractor.InventoryOpen || Cursor.lockState != CursorLockMode.Locked) return;
 
+        // The "No Monsters" mod: poof! (Mods.cs)
+        if (Mods.NoMonsters && Hostile) { Destroy(gameObject); return; }
+
+        // Being ridden (a camel) - the rider does the moving
+        if (Frozen) { Flash(); return; }
+        if (Time.time < iceUntil) { Flash(); return; }   // frozen solid!
+
+        // Floating up into the air (the Floating Wand)
+        if (Time.time < floatUntil)
+        {
+            transform.position += Vector3.up * 1.5f * Time.deltaTime;
+            transform.Rotate(0f, 90f * Time.deltaTime, 0f);
+            fallSpeed = 0f;
+            Flash();
+            return;
+        }
+
         PlayerHealth target = PlayerHealth.Instance;
         Vector3 me = transform.position;
         Vector3 goal = wanderTo;
@@ -157,7 +197,7 @@ public abstract class Monster : MonoBehaviour
         {
             chasing = AnimalGoal(ref goal, ref speed);
         }
-        else if (target != null && !target.Dead)
+        else if (target != null && !target.Dead && !Effects.Invisible && !PlayerLook.MonstersIgnoreYou)   // (it can't see you if you're invisible!)
         {
             toPlayer = target.transform.position - me;
             float flat = new Vector2(toPlayer.x, toPlayer.z).magnitude;
@@ -172,7 +212,7 @@ public abstract class Monster : MonoBehaviour
 
         // Scared of the Star Crystal - run away from it!
         Vector3 star;
-        if (Hostile && StarShrine.Near(me, StarShrine.ScareRange, out star))
+        if (Hostile && FearsStar && StarShrine.Near(me, StarShrine.ScareRange, out star))
         {
             Vector3 away = me - star;
             away.y = 0f;
@@ -190,6 +230,13 @@ public abstract class Monster : MonoBehaviour
             {
                 wanderTimer = Random.Range(3f, 7f);
                 wanderTo = me + new Vector3(Random.Range(-8f, 8f), 0f, Random.Range(-8f, 8f));
+            }
+
+            // Guards don't wander far from what they're guarding
+            Vector3 post;
+            if (GuardPost(out post) && Vector3.Distance(new Vector3(me.x, post.y, me.z), post) > 6f)
+            {
+                goal = wanderTo = post + new Vector3(Random.Range(-3f, 3f), 0f, Random.Range(-3f, 3f));
             }
         }
 
@@ -248,7 +295,8 @@ public abstract class Monster : MonoBehaviour
         byte type = world.GetBlock(x, y, z);
         return type != BlockWorld.Air && type != BlockWorld.Water && type != BlockWorld.Lava &&
                type != BlockWorld.Fire && type != BlockWorld.Cable && type != BlockWorld.PressurePlate &&
-               !BlockWorld.IsWheat(type) && !BlockWorld.IsRail(type) && !(BlockWorld.IsDoor(type) && BlockWorld.DoorIsOpen(type));
+               !BlockWorld.IsWheat(type) && !BlockWorld.IsRail(type) && !BlockWorld.IsFlower(type) && type != BlockWorld.ChocolateRiver &&
+               !(BlockWorld.IsDoor(type) && BlockWorld.DoorIsOpen(type));
     }
 
     protected bool OnGround { get { return fallSpeed == 0f && !climbing; } }
@@ -325,7 +373,7 @@ public abstract class Monster : MonoBehaviour
         Vector3 next = p + by + Vector3.up * climb;
 
         Vector3Int cell = Vector3Int.RoundToInt(next + Vector3.up * 0.4f);
-        if (Solid(cell.x, cell.y, cell.z))
+        if (!PassesThroughWalls && Solid(cell.x, cell.y, cell.z))
         {
             transform.position = p + Vector3.up * 2.5f * Time.deltaTime;   // something in the way - go over it
             return false;
@@ -391,6 +439,7 @@ public abstract class Monster : MonoBehaviour
         panicUntil = Time.time + 3f;   // (animals run off)
         panicFrom = from;
         flashUntil = Time.time + 0.3f;
+        OnHit();
 
         Vector3 away = transform.position - from;
         away.y = 0f;
@@ -449,7 +498,7 @@ public abstract class Monster : MonoBehaviour
     {
         Transform model = new GameObject("Model").transform;
         model.SetParent(transform, false);
-        model.localScale = Vector3.one * scale;
+        model.localScale = Vector3.one * scale * (Mods.GiantCreatures ? 2f : 1f) * (Mods.TinyCreatures ? 0.5f : 1f);
         return model;
     }
 }
@@ -484,9 +533,22 @@ public class MonsterSpawner : MonoBehaviour
 
         timer -= Time.deltaTime;
         if (timer > 0f) return;
-        timer = SpawnSeconds;
+        timer = Mods.MonsterMadness ? SpawnSeconds / 3f : SpawnSeconds;
+        // Ghosts come out in thunderstorms
+        if (Weather.Stormy && !InNether && Random.value < 0.5f)
+        {
+            int ghosts = 0;
+            foreach (Monster monster in Monster.All) if (monster is Ghost) ghosts++;
+            if (ghosts < 3)
+            {
+                Vector3 spot = me + new Vector3(Random.Range(-20f, 20f), 4f, Random.Range(-20f, 20f));
+                Monster.Spawn<Ghost>(world, spot);
+                return;
+            }
+        }
+
         // Only a few in the daytime - lots more at night!
-        int most = InNether ? 4 : DayNight.IsNight ? 10 : 3;
+        int most = (InNether ? 4 : DayNight.IsNight ? 10 : 3) * (Mods.MonsterMadness ? 3 : 1);
         if (hostile >= most) return;
 
         // Somewhere 20 to 40 blocks away, standing on solid ground
@@ -508,11 +570,12 @@ public class MonsterSpawner : MonoBehaviour
             else
             {
                 // Each kind is just as likely as the others
-                int pick = Random.Range(0, 4);
+                int pick = Random.Range(0, 5);
                 if (pick == 0) Monster.Spawn<Zombie>(world, feet);
                 else if (pick == 1) Monster.Spawn<Skeleton>(world, feet);
                 else if (pick == 2) Monster.Spawn<Spider>(world, feet);
-                else Slime.Make(world, feet, Random.Range(2, 4));
+                else if (pick == 3) Slime.Make(world, feet, Random.Range(2, 4));
+                else Monster.Spawn<Mimic>(world, feet);   // pretending to be a block...
             }
             return;
         }
@@ -576,7 +639,7 @@ public class MonsterSpawner : MonoBehaviour
 // An arrow from a skeleton, or a fireball from a fire imp
 public class MonsterShot : MonoBehaviour
 {
-    enum Kind { Arrow, Fireball, Boulder, PlayerArrow }
+    enum Kind { Arrow, Fireball, Boulder, PlayerArrow, StarBolt, Snowball, LavaBomb, PowerBolt }
 
     private Vector3 velocity;
     private float gravity;
@@ -585,7 +648,7 @@ public class MonsterShot : MonoBehaviour
     private float dies;
     private Kind kind;
 
-    private static Material arrowLook, fireLook, rockLook;
+    private static Material arrowLook, fireLook, rockLook, starLook, snowLook;
 
     // An arrow from a skeleton (fireball false) or a fireball from a fire imp
     public static void Fire(Vector3 from, Vector3 velocity, bool fireball, int damage, string how)
@@ -599,10 +662,53 @@ public class MonsterShot : MonoBehaviour
         Launch(Kind.Boulder, from, velocity, 5, "The Stone Golem's boulder got you!");
     }
 
-    // An arrow you shot from your bow - it hits monsters and animals, not you
-    public static void PlayerArrow(Vector3 from, Vector3 velocity)
+    // A sparkling bolt of starlight from a Star Guardian
+    public static void StarBolt(Vector3 from, Vector3 velocity)
     {
-        Launch(Kind.PlayerArrow, from, velocity, 6, "");
+        Launch(Kind.StarBolt, from, velocity, 3, "A Star Guardian's starlight got you!");
+    }
+
+    // A big snowball thrown by the Yeti
+    public static void Snowball(Vector3 from, Vector3 velocity)
+    {
+        Launch(Kind.Snowball, from, velocity, 3, "The Yeti's snowball got you!");
+    }
+
+    // A glowing blob of lava, thrown up by the volcano
+    public static void LavaBomb(Vector3 from, Vector3 velocity)
+    {
+        Launch(Kind.LavaBomb, from, velocity, 4, "A lava bomb from the volcano got you!");
+    }
+
+    // An energy blast from one of your own powers (Powers.cs), in your colour
+    private static readonly Dictionary<Color, Material> boltLooks = new Dictionary<Color, Material>();
+    public static void PowerBolt(Vector3 from, Vector3 velocity, int damage, Color colour)
+    {
+        Launch(Kind.PowerBolt, from, velocity, damage, "");
+        MonsterShot bolt = newest;
+        Material look;
+        if (!boltLooks.TryGetValue(colour, out look))
+        {
+            look = BlockWorld.MakeMaterial(colour);
+            look.EnableKeyword("_EMISSION");
+            look.SetColor("_EmissionColor", colour * 1.5f);
+            boltLooks[colour] = look;
+        }
+        bolt.GetComponent<MeshRenderer>().sharedMaterial = look;
+        bolt.transform.localScale = Vector3.one * 0.3f;
+        bolt.gravity = 0f;
+        Light glow = bolt.gameObject.AddComponent<Light>();
+        glow.type = LightType.Point;
+        glow.color = colour;
+        glow.range = 5f;
+        glow.intensity = 2f;
+    }
+    private static MonsterShot newest;
+
+    // An arrow you shot from your bow - it hits monsters and animals, not you
+    public static void PlayerArrow(Vector3 from, Vector3 velocity, int damage = 6)
+    {
+        Launch(Kind.PlayerArrow, from, velocity, damage, "");
     }
 
     static void Launch(Kind kind, Vector3 from, Vector3 velocity, int damage, string how)
@@ -612,31 +718,38 @@ public class MonsterShot : MonoBehaviour
             arrowLook = BlockWorld.MakeMaterial(new Color(0.55f, 0.40f, 0.22f));
             fireLook = BlockWorld.MakeMaterial(new Color(1.00f, 0.55f, 0.10f));
             rockLook = BlockWorld.Instance.MaterialFor(BlockWorld.Cobblestone);
+            starLook = BlockWorld.MakeMaterial(new Color(0.75f, 0.92f, 1.00f));
+            starLook.EnableKeyword("_EMISSION");
+            starLook.SetColor("_EmissionColor", new Color(0.6f, 0.85f, 1f));
+            snowLook = BlockWorld.Instance.MaterialFor(BlockWorld.Snow);
         }
-        bool fireball = kind == Kind.Fireball, rock = kind == Kind.Boulder;
+        bool starry = kind == Kind.StarBolt, snowy = kind == Kind.Snowball, lava = kind == Kind.LavaBomb;
+        bool fireball = kind == Kind.Fireball || starry || lava, rock = kind == Kind.Boulder || snowy;
 
         GameObject shot = new GameObject(kind.ToString());
         shot.transform.position = from;
-        shot.transform.localScale = fireball ? Vector3.one * 0.35f : rock ? Vector3.one * 0.7f : new Vector3(0.05f, 0.05f, 0.6f);
+        shot.transform.localScale = lava ? Vector3.one * 0.5f : fireball ? Vector3.one * 0.35f : rock ? Vector3.one * (snowy ? 0.5f : 0.7f) : new Vector3(0.05f, 0.05f, 0.6f);
         shot.AddComponent<MeshFilter>().sharedMesh = BlockWorld.Instance.CubeMesh;
-        shot.AddComponent<MeshRenderer>().sharedMaterial = fireball ? fireLook : rock ? rockLook : arrowLook;
+        shot.AddComponent<MeshRenderer>().sharedMaterial = starry ? starLook : fireball ? fireLook : snowy ? snowLook : rock ? rockLook : arrowLook;
 
         if (fireball)
         {
             Light glow = shot.AddComponent<Light>();
             glow.type = LightType.Point;
-            glow.color = new Color(1f, 0.6f, 0.2f);
+            glow.color = starry ? new Color(0.6f, 0.85f, 1f) : new Color(1f, 0.6f, 0.2f);
             glow.range = 5f;
             glow.intensity = 2f;
         }
 
         MonsterShot flying = shot.AddComponent<MonsterShot>();
+        newest = flying;
         flying.kind = kind;
         flying.velocity = velocity;
-        flying.gravity = fireball ? 0f : 9f;
+        flying.gravity = fireball && !lava ? 0f : 9f;
+        if (lava) flying.dies = Time.time + 8f;
         flying.damage = damage;
         flying.how = how;
-        flying.dies = Time.time + 5f;
+        if (!lava) flying.dies = Time.time + 5f;
     }
 
     void Update()
@@ -646,15 +759,16 @@ public class MonsterShot : MonoBehaviour
         velocity.y -= gravity * Time.deltaTime;
         transform.position += velocity * Time.deltaTime;
         if (velocity.sqrMagnitude > 0.01f) transform.rotation = Quaternion.LookRotation(velocity);
-        if (kind == Kind.Fireball || kind == Kind.Boulder) transform.Rotate(300f * Time.deltaTime, 0f, 400f * Time.deltaTime);   // they tumble
+        if (kind != Kind.Arrow && kind != Kind.PlayerArrow) transform.Rotate(300f * Time.deltaTime, 0f, 400f * Time.deltaTime);   // they tumble
 
         // Your arrows hit monsters and animals
-        if (kind == Kind.PlayerArrow)
+        if (kind == Kind.PlayerArrow || kind == Kind.PowerBolt)
         {
             foreach (Monster target in Monster.All)
             {
                 if (Vector3.Distance(transform.position, target.transform.position + Vector3.up * target.AimHeight) > target.HitSize + 0.3f) continue;
                 target.Hit(damage, transform.position - velocity);
+                if (Mods.ExplosiveArrows && kind == Kind.PlayerArrow) Blow();
                 Sounds.Thwack(transform.position);
                 if (target.Hostile) Achievements.Unlock("bow");
                 Destroy(gameObject);
@@ -664,8 +778,8 @@ public class MonsterShot : MonoBehaviour
 
         // Hit you?
         PlayerHealth player = PlayerHealth.Instance;
-        if (kind != Kind.PlayerArrow && player != null &&
-            Vector3.Distance(transform.position, player.transform.position + Vector3.up * 0.9f) < (kind == Kind.Boulder ? 1.1f : 0.8f))
+        if (kind != Kind.PlayerArrow && kind != Kind.PowerBolt && player != null &&
+            Vector3.Distance(transform.position, player.transform.position + Vector3.up * 0.9f) < (kind == Kind.Boulder || kind == Kind.LavaBomb ? 1.1f : 0.8f))
         {
             player.Hurt(damage, how);
             Destroy(gameObject);
@@ -675,8 +789,29 @@ public class MonsterShot : MonoBehaviour
         // Hit a wall, or flown off too far?
         Vector3Int cell = Vector3Int.RoundToInt(transform.position);
         byte type = BlockWorld.Instance != null ? BlockWorld.Instance.GetBlock(cell.x, cell.y, cell.z) : BlockWorld.Air;
-        bool solid = type != BlockWorld.Air && type != BlockWorld.Water && type != BlockWorld.Fire && type != BlockWorld.Lava;
+        bool solid = type != BlockWorld.Air && type != BlockWorld.Water && type != BlockWorld.Fire && type != BlockWorld.Lava &&
+                     !BlockWorld.IsFlower(type) && !BlockWorld.IsWheat(type);
+        if (solid && kind == Kind.PlayerArrow && type == BlockWorld.Target)
+        {
+            Wallet.Earn(1, "Bullseye!");
+            Achievements.Unlock("target");
+        }
+        if (solid && kind == Kind.PlayerArrow && Mods.ExplosiveArrows) { Blow(); return; }
         if (solid || Time.time > dies) Destroy(gameObject);
+    }
+
+    // An explosive arrow (Mods.cs): a little TNT, lit with no fuse, just where it hit
+    void Blow()
+    {
+        BlockWorld world = BlockWorld.Instance;
+        Vector3Int cell = Vector3Int.RoundToInt(transform.position - velocity.normalized * 0.6f);
+        byte there = world.GetBlock(cell.x, cell.y, cell.z);
+        if (there == BlockWorld.Air || there == BlockWorld.Water)
+        {
+            world.SetBlock(cell.x, cell.y, cell.z, BlockWorld.Tnt);
+            Tnt.Ignite(world, cell, 0.05f);
+        }
+        Destroy(gameObject);
     }
 
     // The speed and direction to throw something so it lands on a target

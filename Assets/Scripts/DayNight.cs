@@ -102,7 +102,10 @@ public class DayNight : MonoBehaviour
     void Update()
     {
         bool paused = BlockInteractor.InventoryOpen || Cursor.lockState != CursorLockMode.Locked;
-        if (!paused) time = Mathf.Repeat(time + Time.deltaTime / DaySeconds, 1f);
+        if (!paused) time = Mathf.Repeat(time + Time.deltaTime / DaySeconds * (Mods.SpeedyDays ? 8f : 1f), 1f);
+        if (Mods.AlwaysDay) time = 0.25f;   // midday, all day long (Mods.cs)
+        if (sky != null && sky.HasProperty("_SkyTint"))
+            sky.SetColor("_SkyTint", Mods.RainbowSky ? Color.HSVToRGB(Mathf.Repeat(Time.time * 0.03f, 1f), 0.6f, 0.9f) : new Color(0.5f, 0.5f, 0.5f));
 
         // How high the sun is: 1 at midday, 0 at the horizon, below 0 at night
         float height = Mathf.Sin(time * Mathf.PI * 2f);
@@ -111,6 +114,7 @@ public class DayNight : MonoBehaviour
         // Made it through a whole night in survival?
         bool night = IsNight;
         if (wasNight && !night && PlayerHealth.Instance != null && !PlayerHealth.Instance.Dead) Achievements.Unlock("night");
+        if (wasNight && !night) QuestBoardDays.NewDay();   // new jobs on the village quest board
         wasNight = night;
 
         if (sun != null)
@@ -124,7 +128,7 @@ public class DayNight : MonoBehaviour
         moon.transform.rotation = Quaternion.Euler(time * 360f + 180f, -30f, 0f);
         moon.intensity = (1f - daylight) * 0.35f;
 
-        RenderSettings.ambientIntensity = Mathf.Lerp(0.25f, ambientWas, daylight);
+        RenderSettings.ambientIntensity = Mods.NightVision ? Mathf.Max(ambientWas, 1.3f) : Mathf.Lerp(0.25f, ambientWas, daylight);
         if (sky != null && sky.HasProperty("_Exposure"))
             sky.SetFloat("_Exposure", Mathf.Lerp(0.08f, 1.3f, daylight));
 

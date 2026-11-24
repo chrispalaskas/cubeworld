@@ -15,6 +15,7 @@ public class Weather : MonoBehaviour
 
     // How much the weather darkens the day (1 when clear)
     public static float Gloom { get { return Instance == null ? 1f : Instance.gloom; } }
+    public static bool Stormy { get { return Instance != null && Instance.sky == Sky.Storm; } }
 
     private Sky sky = Sky.Clear;
     private float changeAt;

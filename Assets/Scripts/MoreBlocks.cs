@@ -21,8 +21,9 @@ public partial class BlockWorld
     public const byte WheatRipe  = 155;   // ready to pick
     public const int WheatStages = 4;
 
-    // Not blocks - extra looks used when drawing the sides of blocks
-    const byte GrassSide = 250;
+    // Not a block - an extra look used when drawing the sides of grass.
+    // (It's kept past the end of the block numbers, so all 256 can be real blocks.)
+    const int GrassSide = 256;
 
     public static bool IsWheat(byte type) { return type >= WheatFirst && type <= WheatRipe; }
 
@@ -60,7 +61,7 @@ public partial class BlockWorld
     }
 
     // Grass shows a different face depending on which way it looks
-    static byte FaceLook(byte type, int direction)
+    static int FaceLook(byte type, int direction)
     {
         if (type != Grass) return type;
         if (direction == 2) return Grass;   // the top
@@ -154,7 +155,7 @@ public partial class BlockWorld
                 SetBlock(cell.x, cell.y, cell.z, Air);
                 continue;
             }
-            if (type < WheatRipe && Random.value < 1f / 30f)
+            if (type < WheatRipe && Random.value < (Mods.FastCrops ? 0.6f : 1f / 30f))
                 SetBlock(cell.x, cell.y, cell.z, (byte)(type + 1));
         }
     }

@@ -100,7 +100,7 @@ public class ItemDrop : MonoBehaviour
                 }
                 return;
             }
-            if (distance < PullRange)
+            if (distance < (Mods.ItemMagnet ? 22f : PlayerLook.FormFetches ? 16f : PullRange))   // (a dog fetches from much further!)
             {
                 transform.position = Vector3.MoveTowards(transform.position, target, 6f * Time.deltaTime);
                 velocity = Vector3.zero;
@@ -114,7 +114,8 @@ public class ItemDrop : MonoBehaviour
         Vector3Int below = Vector3Int.RoundToInt(next + Vector3.down * 0.1f);
         byte under = world.GetBlock(below.x, below.y, below.z);
         bool solid = under != BlockWorld.Air && under != BlockWorld.Water && under != BlockWorld.Fire &&
-                     under != BlockWorld.Cable && !BlockWorld.IsWheat(under) && !BlockWorld.IsRail(under);
+                     under != BlockWorld.Cable && !BlockWorld.IsWheat(under) && !BlockWorld.IsRail(under) && !BlockWorld.IsFlower(under) &&
+                     under != BlockWorld.ChocolateRiver;
 
         if (solid && velocity.y < 0f)
         {

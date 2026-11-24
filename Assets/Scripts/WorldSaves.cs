@@ -15,11 +15,12 @@ public static class WorldSaves
     public const int Home = 0;
     public const int MagicLand = 1;
     public const int Nether = 2;     // the land of fire and dragons, through a fire portal
+    public const int CandyLand = 3;  // all made of sweets, through a candy portal
 
     // A short name for each place, used in file names and remembered settings
     public static string PlaceName(int place)
     {
-        return place == MagicLand ? "magic" : place == Nether ? "nether" : "home";
+        return place == MagicLand ? "magic" : place == Nether ? "nether" : place == CandyLand ? "candy" : "home";
     }
 
     // Bump this if the file layout ever changes, so old saves are spotted
@@ -58,7 +59,7 @@ public static class WorldSaves
         DateTime? latest = WhenSaved(slot, Home);
         if (!latest.HasValue) return null;
 
-        foreach (int place in new[] { MagicLand, Nether })
+        foreach (int place in new[] { MagicLand, Nether, CandyLand })
         {
             DateTime? other = Exists(slot, place) ? WhenSaved(slot, place) : null;
             if (other.HasValue && other.Value > latest.Value) latest = other;
@@ -157,6 +158,7 @@ public static class WorldSaves
         File.Delete(PathFor(slot, Home));
         File.Delete(PathFor(slot, MagicLand));   // (does nothing if there isn't one)
         File.Delete(PathFor(slot, Nether));
+        File.Delete(PathFor(slot, CandyLand));
         SetLastPlace(slot, Home);
 
         // ...and forgets its magic villagers, so a new world gets new ones

@@ -26,11 +26,15 @@ public partial class BlockInteractor
     // Which tab a recipe belongs in
     static int TabFor(byte item)
     {
+        if (IsWand(item) || IsPotion(item) || item == BlockWorld.Cauldron || item == BlockWorld.EnchantTable || item == BlockWorld.CandyPortal) return 6;
+        if (item == CameraItem || item == PaintBucket || item == BuilderWand) return 3;
+        if (item == BlockWorld.Lantern || item == BlockWorld.FlowerPot || item == BlockWorld.PhotoFrame) return 2;
+        if (item == BlockWorld.Elevator || item == BlockWorld.Target || item == BlockWorld.StartPad || item == BlockWorld.FinishPad) return 5;
         if (IsSword(item) || IsDiggingTool(item) || item == Wings || item == BlockWorld.Bow || item == BlockWorld.Arrow ||
             item == BlockWorld.FishingRod || IsArmour(item) || item == BlockWorld.Compass || item == BlockWorld.TreasureMap) return 3;
         if (IsFood(item) || item == Bread) return 4;
         if (item == BlockWorld.Button || item == BlockWorld.Cable || item == BlockWorld.DispenserNorth || item == BlockWorld.PressurePlate ||
-            item == BlockWorld.Timer || item == BlockWorld.SignalLight || item == BlockWorld.NoteBlock || item == BlockWorld.PistonNorth ||
+            item == BlockWorld.Timer || item == BlockWorld.Observer || item == BlockWorld.SignalLight || item == BlockWorld.NoteBlock || item == BlockWorld.PistonNorth ||
             item == BlockWorld.ConveyorNorth || item == BlockWorld.RailNS || item == BlockWorld.Minecart || item == BlockWorld.Boat ||
             item == BlockWorld.Tnt || item == BlockWorld.MegaTnt) return 5;
         if (BlockWorld.IsFurniture(item) || item == BlockWorld.Chest || item == BlockWorld.DoorItem || item == BlockWorld.Bookshelf ||

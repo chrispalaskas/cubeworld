@@ -45,7 +45,8 @@ public class PlayerHealth : MonoBehaviour
     public bool Sprinting { get; set; }
 
     // 0 none, 1 leather, 2 iron, 3 diamond - each takes more off every hit
-    static readonly float[] Protection = { 0f, 0.25f, 0.45f, 0.65f };
+    // How much of each hit armour stops: none, leather, iron, diamond
+    static readonly float[] Protection = { 0f, 0.35f, 0.6f, 0.8f };
     private int armour;
     public int Armour
     {
@@ -91,7 +92,7 @@ public class PlayerHealth : MonoBehaviour
         if (BlockInteractor.InventoryOpen || Cursor.lockState != CursorLockMode.Locked) return;   // paused
 
         // Getting hungry...
-        hungerTimer -= Time.deltaTime * (Sprinting ? 3f : 1f);
+        hungerTimer -= Time.deltaTime * (Sprinting ? 3f : 1f) * (Mods.CantGetHurt || PlayerLook.NeverHungry ? 0f : 1f);
         if (hungerTimer <= 0f)
         {
             hungerTimer = HungrySeconds;
@@ -127,7 +128,7 @@ public class PlayerHealth : MonoBehaviour
         }
 
         // Holding your breath under water
-        if (HeadUnderWater())
+        if (HeadUnderWater() && !Effects.Gills)   // (a water breathing potion means no drowning)
         {
             breath -= Time.deltaTime;
             if (breath <= 0f)
@@ -158,10 +159,30 @@ public class PlayerHealth : MonoBehaviour
     // --- Getting hurt and getting better ---
 
     // Takes off some health (in halves of a heart). "how" is what's said if it knocks you out.
+    private float blockedSaidAt = -100f;
+
     public void Hurt(int amount, string how)
     {
         if (Dead || amount <= 0) return;
-        if (how != "" && armour > 0) amount = Mathf.Max(1, Mathf.RoundToInt(amount * (1f - Protection[armour])));   // armour helps
+        if (Mods.CantGetHurt && !how.Contains("out of the world")) return;   // (Mods.cs)
+        if ((PlayerLook.Fireproof || Mods.Fireproof) && (how.Contains("fire") || how.Contains("lava") || how.Contains("burnt"))) return;   // a fire imp (Transform.cs)
+        if (PlayerLook.SoftLanding && how.Contains("fell from")) return;    // cats land on their feet
+        if (PlayerLook.Fluffy) amount = Mathf.CeilToInt(amount / 2f);      // a fluffy sheep
+        // Armour stops a lot of every hit (but not hunger, drowning or falling out of the world).
+        // What's left over is rounded up or down by chance, so even small hits get blocked sometimes.
+        bool armourHelps = armour > 0 && how != "" && !how.Contains("air") && !how.Contains("out of the world");
+        if (armourHelps)
+        {
+            float left = amount * (1f - Protection[armour]);
+            amount = Mathf.FloorToInt(left) + (Random.value < left - Mathf.Floor(left) ? 1 : 0);
+            if (amount <= 0)
+            {
+                Sounds.Place(BlockWorld.Iron, transform.position);   // clang!
+                if (Time.time > blockedSaidAt + 6f) PortalTraveller.Announce("Your armour blocked it!");
+                blockedSaidAt = Time.time;
+                return;
+            }
+        }
 
         health -= amount;
         hurtFlash = Time.time;

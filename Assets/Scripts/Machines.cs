@@ -18,7 +18,8 @@ using UnityEngine;
 //   - a piston pushes the blocks in front of it one space along
 //   - a signal light glows
 //   - a note block plays its note
-// Power can come from a pressure plate (when you, or any creature, steps on
+// Power can come from an observer (when the block it's watching changes),
+// a pressure plate (when you, or any creature, steps on
 // it) or a timer (every couple of seconds, all by itself) as well as a button.
 // A dispenser, door or TNT right next to the button works too, without any cable.
 //
@@ -75,6 +76,8 @@ public partial class BlockInteractor
                 StartCoroutine(SendPower(timer));
             }
         }
+
+        RunObservers(world);   // (Observer.cs)
 
         plateCheck -= Time.deltaTime;
         if (plateCheck > 0f) return;
@@ -155,7 +158,8 @@ public partial class BlockInteractor
 
     // Spreads out from the button one step at a time, through cable, so you
     // can see it travel. Everything it reaches gets powered once.
-    IEnumerator SendPower(Vector3Int button)
+    // "onlyWay": power that only goes out of one side (an observer's back)
+    IEnumerator SendPower(Vector3Int button, Vector3Int? onlyWay = null)
     {
         BlockWorld world = BlockWorld.Instance;
         Queue<Vector3Int> reached = new Queue<Vector3Int>();
@@ -175,6 +179,7 @@ public partial class BlockInteractor
                 Vector3Int from = reached.Dequeue();
                 foreach (Vector3Int way in SixWays)
                 {
+                    if (onlyWay.HasValue && from == button && way != onlyWay.Value) continue;
                     Vector3Int next = from + way;
                     if (done.Contains(next)) continue;
                     done.Add(next);

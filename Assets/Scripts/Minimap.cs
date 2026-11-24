@@ -41,7 +41,7 @@ public class Minimap : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.N) && !BlockInteractor.InventoryOpen) hidden = !hidden;
+        if (Input.GetKeyDown(KeyCode.N) && !BlockInteractor.InventoryOpen && !Mods.ScreenOpen) hidden = !hidden;
 
         redrawTimer -= Time.deltaTime;
         if (redrawTimer > 0f || hidden || BlockWorld.Instance == null) return;
